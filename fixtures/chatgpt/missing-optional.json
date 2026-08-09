@@ -1,0 +1,14 @@
+[
+  {
+    "mapping": {
+      "root": {
+        "parent": null,
+        "children": [],
+        "message": {
+          "author": {},
+          "content": { "parts": ["No optional metadata"] }
+        }
+      }
+    }
+  }
+]

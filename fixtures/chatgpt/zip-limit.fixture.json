@@ -1,0 +1,6 @@
+{
+  "entries": [
+    { "name": "conversations.json", "fixture": "minimal.json" },
+    { "name": "conversation-2.json", "fixture": "numbered-conversation-2.json" }
+  ]
+}

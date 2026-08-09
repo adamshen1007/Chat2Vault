@@ -1,0 +1,16 @@
+{
+  "id": "numbered-1",
+  "current_node": "n1",
+  "mapping": {
+    "n1": {
+      "id": "n1",
+      "parent": null,
+      "children": [],
+      "message": {
+        "id": "n1",
+        "author": { "role": "user" },
+        "content": { "parts": ["Numbered one"] }
+      }
+    }
+  }
+}

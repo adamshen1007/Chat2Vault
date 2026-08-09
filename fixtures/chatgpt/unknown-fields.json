@@ -1,0 +1,24 @@
+[
+  {
+    "id": "unknown",
+    "future_conversation_field": { "nested": true },
+    "current_node": "x",
+    "mapping": {
+      "x": {
+        "id": "x",
+        "parent": null,
+        "children": [],
+        "future_node_field": 42,
+        "message": {
+          "id": "x",
+          "author": { "role": "user", "future_author_field": true },
+          "content": {
+            "parts": ["Known content"],
+            "future_content_field": "ignored"
+          },
+          "future_message_field": [1, 2, 3]
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,27 @@
+[
+  {
+    "id": "cyclic",
+    "mapping": {
+      "cycle-a": {
+        "id": "cycle-a",
+        "parent": "cycle-b",
+        "children": ["cycle-b"],
+        "message": {
+          "id": "cycle-a",
+          "author": { "role": "user" },
+          "content": { "parts": ["Synthetic cycle A"] }
+        }
+      },
+      "cycle-b": {
+        "id": "cycle-b",
+        "parent": "cycle-a",
+        "children": ["cycle-a"],
+        "message": {
+          "id": "cycle-b",
+          "author": { "role": "assistant" },
+          "content": { "parts": ["Synthetic cycle B"] }
+        }
+      }
+    }
+  }
+]

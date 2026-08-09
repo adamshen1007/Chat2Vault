@@ -1,0 +1,30 @@
+{
+  "name": "chat2vault",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Deterministic, offline conversion of AI conversation exports into canonical knowledge sources.",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": ">=11 <12"
+  },
+  "scripts": {
+    "build": "pnpm --filter @chat2vault/core build",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test": "pnpm --filter @chat2vault/core test",
+    "typecheck": "pnpm --filter @chat2vault/core typecheck",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.33.0",
+    "@types/node": "^24.2.1",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.39.1",
+    "vitest": "^3.2.4"
+  }
+}

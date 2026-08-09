@@ -1,0 +1,21 @@
+[
+  {
+    "id": "code",
+    "current_node": "c1",
+    "mapping": {
+      "c1": {
+        "id": "c1",
+        "parent": null,
+        "children": [],
+        "message": {
+          "id": "c1",
+          "author": { "role": "assistant" },
+          "content": {
+            "content_type": "code",
+            "parts": ["const value = 1;\nconsole.log(value);\n"]
+          }
+        }
+      }
+    }
+  }
+]

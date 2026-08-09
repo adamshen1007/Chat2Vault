@@ -1,0 +1,34 @@
+[
+  {
+    "id": "multi-1",
+    "current_node": "a",
+    "mapping": {
+      "a": {
+        "id": "a",
+        "parent": null,
+        "children": [],
+        "message": {
+          "id": "a",
+          "author": { "role": "user" },
+          "content": { "parts": ["First"] }
+        }
+      }
+    }
+  },
+  {
+    "id": "multi-2",
+    "current_node": "b",
+    "mapping": {
+      "b": {
+        "id": "b",
+        "parent": null,
+        "children": [],
+        "message": {
+          "id": "b",
+          "author": { "role": "assistant" },
+          "content": { "parts": ["Second"] }
+        }
+      }
+    }
+  }
+]

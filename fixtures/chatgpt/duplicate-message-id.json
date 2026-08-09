@@ -1,0 +1,28 @@
+[
+  {
+    "id": "duplicates",
+    "current_node": "node-2",
+    "mapping": {
+      "node-1": {
+        "id": "node-1",
+        "parent": null,
+        "children": ["node-2"],
+        "message": {
+          "id": "duplicate",
+          "author": { "role": "user" },
+          "content": { "parts": ["One"] }
+        }
+      },
+      "node-2": {
+        "id": "node-2",
+        "parent": "node-1",
+        "children": [],
+        "message": {
+          "id": "duplicate",
+          "author": { "role": "assistant" },
+          "content": { "parts": ["Two"] }
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,37 @@
+[
+  {
+    "id": "branching",
+    "mapping": {
+      "root": {
+        "id": "root",
+        "parent": null,
+        "children": ["left", "right"],
+        "message": {
+          "id": "root",
+          "author": { "role": "user" },
+          "content": { "parts": ["Choose"] }
+        }
+      },
+      "left": {
+        "id": "left",
+        "parent": "root",
+        "children": [],
+        "message": {
+          "id": "left",
+          "author": { "role": "assistant" },
+          "content": { "parts": ["Left branch"] }
+        }
+      },
+      "right": {
+        "id": "right",
+        "parent": "root",
+        "children": [],
+        "message": {
+          "id": "right",
+          "author": { "role": "assistant" },
+          "content": { "parts": ["Right branch"] }
+        }
+      }
+    }
+  }
+]

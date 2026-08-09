@@ -1,0 +1,18 @@
+[
+  {
+    "id": "orphan",
+    "current_node": "orphan-node",
+    "mapping": {
+      "orphan-node": {
+        "id": "orphan-node",
+        "parent": "missing-node",
+        "children": [],
+        "message": {
+          "id": "orphan-message",
+          "author": { "role": "user" },
+          "content": { "parts": ["Preserve me"] }
+        }
+      }
+    }
+  }
+]

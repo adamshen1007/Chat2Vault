@@ -1,0 +1,39 @@
+[
+  {
+    "id": "conversation-minimal",
+    "title": "Synthetic minimal",
+    "create_time": 1700000000,
+    "update_time": 1700000010,
+    "current_node": "message-2",
+    "mapping": {
+      "message-1": {
+        "id": "message-1",
+        "parent": null,
+        "children": ["message-2"],
+        "message": {
+          "id": "message-1",
+          "author": { "role": "user" },
+          "create_time": 1700000001,
+          "content": {
+            "content_type": "text",
+            "parts": ["Hello, synthetic world."]
+          }
+        }
+      },
+      "message-2": {
+        "id": "message-2",
+        "parent": "message-1",
+        "children": [],
+        "message": {
+          "id": "message-2",
+          "author": { "role": "assistant" },
+          "create_time": 1700000002,
+          "content": {
+            "content_type": "text",
+            "parts": ["Hello from a test fixture."]
+          }
+        }
+      }
+    }
+  }
+]

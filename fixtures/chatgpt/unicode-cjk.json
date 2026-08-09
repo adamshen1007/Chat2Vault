@@ -1,0 +1,18 @@
+[
+  {
+    "id": "unicode",
+    "current_node": "u1",
+    "mapping": {
+      "u1": {
+        "id": "u1",
+        "parent": null,
+        "children": [],
+        "message": {
+          "id": "u1",
+          "author": { "role": "user" },
+          "content": { "parts": ["你好，世界 🌏 — café"] }
+        }
+      }
+    }
+  }
+]

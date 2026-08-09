@@ -1,0 +1,46 @@
+{
+  "AGENTS.md": {
+    "sha256": "51d22d4d5d1dec4c1c48f04dedfb1be8f6d01d7cc8fa67aa4f5b4d739315b1fc",
+    "bytes": 1994
+  },
+  "README.md": {
+    "sha256": "096f4b4c547aa6f9513fec8a43ee41e6026493739d3aa9442f2e329f6f463f6f",
+    "bytes": 2125
+  },
+  "docs/00_DOCUMENT_INDEX.md": {
+    "sha256": "6c52855e0ccf49e11b157c84fb638c48882b06981160a9be981dd9781fba169c",
+    "bytes": 1352
+  },
+  "docs/01_PRODUCT_BRIEF.md": {
+    "sha256": "733d2cc5df0c232ff4200b3a5e56293dff203b564924f7a3ec13e5ba2d52ee14",
+    "bytes": 5201
+  },
+  "docs/02_COMPETITIVE_POSITIONING.md": {
+    "sha256": "e003dce3e5a9a776313000e335cb59a188762016b67748a6c14df0007ae81e60",
+    "bytes": 4109
+  },
+  "docs/03_ARCHITECTURE.md": {
+    "sha256": "6fe4d84bc6bb989605328febdb7d8337d7dcb6d648958d1641a368fc20cc3a95",
+    "bytes": 6065
+  },
+  "docs/04_KNOWLEDGE_SCHEMA.md": {
+    "sha256": "54f27ff85d7b4fd387d70dac624476419709756eb0a79fe5f20b2ecaa28588c3",
+    "bytes": 5155
+  },
+  "docs/05_ROADMAP.md": {
+    "sha256": "70b28539f89c6798a03df1e867b0e2df677c3e768242ecb87de8aec804f64c62",
+    "bytes": 4349
+  },
+  "docs/06_OPEN_SOURCE_RELEASE_STRATEGY.md": {
+    "sha256": "7d981c041ed200d58097b04004f21f8987ab859a23238ce202326d92acdec912",
+    "bytes": 3674
+  },
+  "docs/07_M01_SPEC.md": {
+    "sha256": "d48400d4f27031348de3d3018fb4e587694e2b151daaa1d999acb2087e97cc03",
+    "bytes": 5839
+  },
+  "prompts/CODEX_M01_EXECUTION_PROMPT.md": {
+    "sha256": "03a543dc734af29e75f19a8768e61e5636bb27c2ceb68cc3549ce0239e654dfb",
+    "bytes": 6376
+  }
+}
