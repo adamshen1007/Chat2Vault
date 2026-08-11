@@ -1,0 +1,9 @@
+{
+  "id": "chat-to-vault",
+  "name": "Chat2Vault",
+  "version": "0.2.0",
+  "minAppVersion": "1.7.4",
+  "description": "Offline, read-only preview of ChatGPT exports.",
+  "author": "Chat2Vault",
+  "isDesktopOnly": true
+}

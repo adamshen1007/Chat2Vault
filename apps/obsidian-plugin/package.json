@@ -1,0 +1,20 @@
+{
+  "name": "@chat2vault/obsidian-plugin",
+  "version": "0.2.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@chat2vault/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.2.1",
+    "esbuild": "^0.25.9",
+    "jsdom": "^26.1.0",
+    "obsidian": "^1.8.7"
+  }
+}

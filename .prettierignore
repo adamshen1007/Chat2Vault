@@ -4,3 +4,6 @@ node_modules
 pnpm-lock.yaml
 docs/MANIFEST.json
 fixtures/chatgpt/malformed.json
+docs/M02_SPEC.md
+apps/obsidian-plugin/main.js
+apps/obsidian-plugin/worker.js

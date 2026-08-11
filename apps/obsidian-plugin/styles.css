@@ -1,0 +1,114 @@
+.c2v-preview {
+  --c2v-rule: var(--background-modifier-border);
+  container-type: inline-size;
+  padding: var(--size-4-4);
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.c2v-header,
+.c2v-toolbar,
+.c2v-actions,
+.c2v-pager {
+  display: flex;
+  gap: var(--size-4-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.c2v-header h2 {
+  margin-right: auto;
+}
+.c2v-state {
+  font-family: var(--font-monospace);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: var(--font-ui-smaller);
+}
+.c2v-file {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.c2v-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.8fr);
+  gap: var(--size-4-5);
+  margin-block: var(--size-4-4);
+}
+.c2v-list,
+.c2v-detail {
+  min-width: 0;
+}
+.c2v-toolbar input {
+  min-width: 0;
+  max-width: 100%;
+}
+.c2v-list {
+  border-right: 1px solid var(--c2v-rule);
+  padding-right: var(--size-4-4);
+}
+.c2v-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2.5rem;
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-block: var(--size-4-1);
+  white-space: normal;
+}
+.c2v-message {
+  border-left: 2px solid var(--interactive-accent);
+  padding-left: var(--size-4-3);
+  margin-block: var(--size-4-5);
+}
+.c2v-message h4,
+.c2v-meta,
+.c2v-diagnostic strong {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+}
+.c2v-message pre {
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.c2v-diagnostics {
+  border-top: 1px solid var(--c2v-rule);
+  padding-top: var(--size-4-3);
+}
+.c2v-diagnostic {
+  display: grid;
+  grid-template-columns: minmax(10rem, auto) 1fr;
+  gap: var(--size-4-3);
+  padding-block: var(--size-4-2);
+}
+.c2v-error,
+.is-error strong {
+  color: var(--text-error);
+}
+@media (max-width: 480px) {
+  .c2v-layout {
+    grid-template-columns: 1fr;
+  }
+  .c2v-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--c2v-rule);
+    padding: 0 0 var(--size-4-4);
+  }
+  .c2v-diagnostic {
+    grid-template-columns: 1fr;
+  }
+}
+@container (max-width: 480px) {
+  .c2v-layout {
+    grid-template-columns: 1fr;
+  }
+  .c2v-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--c2v-rule);
+    padding: 0 0 var(--size-4-4);
+  }
+  .c2v-diagnostic {
+    grid-template-columns: 1fr;
+  }
+}

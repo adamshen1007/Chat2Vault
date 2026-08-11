@@ -9,12 +9,13 @@
     "pnpm": ">=11 <12"
   },
   "scripts": {
-    "build": "pnpm --filter @chat2vault/core build",
+    "build": "pnpm -r build",
+    "check:plugin": "node apps/obsidian-plugin/scripts/check-plugin.mjs && node apps/obsidian-plugin/scripts/check-worker.mjs",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "test": "pnpm --filter @chat2vault/core test",
-    "typecheck": "pnpm --filter @chat2vault/core typecheck",
-    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm check:plugin"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",

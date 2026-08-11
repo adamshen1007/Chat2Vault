@@ -4,9 +4,11 @@ Chat2Vault is a local-first tool for turning AI conversations into source-linked
 
 ## Current status
 
-Milestone 01 provides a deterministic, offline TypeScript core for supported ChatGPT data-export JSON and ZIP inputs. It normalizes exports into a provider-independent canonical schema, preserves conversation graph identity, emits safe typed diagnostics, and generates SHA-256 fingerprints.
+Milestone 02 adds a desktop-only Obsidian preview plugin to the deterministic M01 import core. The plugin accepts supported ChatGPT ZIP/JSON exports, displays bounded conversation and diagnostic pages, and keeps imported material in memory only.
 
-M01 does **not** include an Obsidian plugin, vault writes, AI distillation, provider APIs, browser automation, or non-ChatGPT importers.
+M02 remains preview-only. It does **not** write to a vault, call an AI or network provider, use provider APIs, automate a browser, synthesize knowledge, or support non-ChatGPT importers.
+
+The plugin is desktop-only because it reads export files selected explicitly from outside the vault. It never scans folders: it accepts one ZIP, one JSON, or up to sixteen JSON files through the picker or drag/drop, subject to the documented size limits. M02 contains no network client, telemetry, analytics, remote assets, or update check, and it creates no notes or other vault files.
 
 ## Development
 
@@ -31,11 +33,13 @@ pnpm test
 pnpm build
 ```
 
-The implementation boundary is `packages/core`. Synthetic fixtures live in `fixtures/chatgpt`.
+The import core is in `packages/core`; the plugin is in `apps/obsidian-plugin`. Synthetic fixtures live in `fixtures/chatgpt`.
 
-## Privacy in M01
+The plugin build produces `apps/obsidian-plugin/main.js` and `worker.js`; install those files together with `manifest.json` and `styles.css` in a disposable Obsidian vault for the runtime smoke procedure documented in [M02 implementation notes](docs/09_M02_IMPLEMENTATION_NOTES.md).
 
-Parsing, normalization, archive reading, and hashing run locally. The core contains no network client, does not call an LLM, does not depend on Obsidian, and does not write imported content to disk. Imported text is treated strictly as untrusted data. Repository fixtures are synthetic and contain no real conversations.
+## Privacy
+
+Parsing, normalization, archive reading, hashing, filtering, and preview rendering run locally. Imported text is treated strictly as untrusted data and rendered inertly. The plugin persists only `{ schemaVersion, previewMessagesPerPage }`; it does not persist imports, identifiers, paths, diagnostics, or file names. Repository fixtures are synthetic and contain no real conversations.
 
 ## Supported imports and limitations
 

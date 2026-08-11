@@ -14,6 +14,10 @@ Working name: Chat2Vault
 | `06_OPEN_SOURCE_RELEASE_STRATEGY.md`       | Licensing, distribution, contribution, privacy, compatibility, community release requirements |
 | `07_M01_SPEC.md`                           | Milestone 01 specification and verification gate                                              |
 | `08_M01_IMPLEMENTATION_NOTES.md`           | Implemented parser behavior, branch rule, fingerprints, ZIP security, and limitations         |
+| `M02_SPEC.md`                              | Reviewed Milestone 02 preview-plugin specification and acceptance contract                    |
+| `09_M02_IMPLEMENTATION_NOTES.md`           | M02 implementation, privacy/security bounds, build, verification, and runtime smoke procedure |
+| `10_M02_RUNTIME_GATE_REPORT.md`            | Historical first runtime-gate execution, blockers, and superseded compatibility evidence      |
+| `11_M02_RUNTIME_CLOSURE_REPORT.md`         | Final exact-minimum/current-stable closure evidence, AC ledger, and M02 decision              |
 | `../prompts/CODEX_M01_EXECUTION_PROMPT.md` | Consolidated Codex implementation prompt for Milestone 01                                     |
 | `../AGENTS.md`                             | Persistent repository governance for Codex/agents                                             |
 
@@ -29,3 +33,5 @@ For Milestone 01:
 6. `docs/05_ROADMAP.md`
 
 If documents conflict, follow the higher authority and report the conflict rather than silently choosing.
+
+For Milestone 02, `AGENTS.md` and `M02_SPEC.md` are the active implementation authorities; M01 remains the immutable import-core baseline.
