@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+/* eslint-disable @typescript-eslint/require-await -- async UI adapter mock models Preview planner settlement. */
 import {
   fingerprint,
   type CanonicalConversation,
@@ -313,6 +314,141 @@ describe("preview view", () => {
     expect(drop.defaultPrevented).toBe(true);
     expect(reads).toBe(0);
     expect(controller.snapshot.state).toBe("error");
+    await view.onClose();
+  });
+
+  it("renders the source-note plan as bounded inert raw text and enables explicit Save only for writable plans", async () => {
+    const item: CanonicalConversation = {
+      schemaVersion: 1,
+      provider: "chatgpt",
+      title: "Source UI",
+      messages: [],
+      metadata: {
+        chatgptGraph: {
+          nodeCount: 0,
+          selectedPathNodeIds: [],
+          alternativeLeafNodeIds: [],
+          currentNodeId: null,
+        },
+      },
+      contentFingerprint: `sha256:${"b".repeat(64)}`,
+    };
+    const result = importResult([item]);
+    result.source.sourceFileFingerprint = `sha256:${"a".repeat(64)}`;
+    const controller = new ImportController(() => Promise.resolve(result));
+    const noteContent = `<script>alert(1)</script>\n${"x".repeat(65_530)}😀tail`;
+    let createdContent: string | undefined;
+    let createdPath: string | undefined;
+    const writablePlan = {
+      disposition: "new" as const,
+      targetPath: "Sources/note.md",
+      noteContent,
+      noteContentFingerprint: `sha256:${"c".repeat(64)}`,
+      foldersToCreate: [],
+      diagnostics: [],
+    };
+    const view = new Chat2VaultView({} as never, controller, () => 25, {
+      sourceRoot: () => "Sources",
+      sourceRootPending: () => false,
+      settingsGeneration: () => 0,
+      sourceWriterPlatformEligible: () => true,
+      createAdapter: () =>
+        ({
+          plan: async () => writablePlan,
+          checkpointFolder: async () => ({
+            status: "missing-safe",
+            resolvedPath: "",
+          }),
+          createFolder: async () => undefined,
+          verifyFolder: async () => ({ status: "safe" }),
+          checkpointFinalParent: async () => ({
+            status: "safe",
+            resolvedTargetPath: writablePlan.targetPath,
+          }),
+          createNote: async (path: string, content: string) => {
+            createdPath = path;
+            createdContent = content;
+          },
+          verifyCreatedNote: async () => ({ status: "verified" }),
+        }) as never,
+      registerInvalidator: () => () => undefined,
+    });
+    document.body.append(view.contentEl);
+    await view.onOpen();
+    await controller.import([
+      {
+        name: "synthetic.json",
+        size: 1,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)),
+      },
+    ]);
+    view.contentEl.querySelector<HTMLButtonElement>(".c2v-row")?.click();
+    const preview = [...view.contentEl.querySelectorAll("button")].find(
+      (button) => button.textContent === "Preview source note",
+    );
+    preview?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(view.contentEl.querySelector(".c2v-source script")).toBeNull();
+    expect(
+      view.contentEl
+        .querySelector(".c2v-source pre > code")
+        ?.textContent.startsWith("<script>"),
+    ).toBe(true);
+    expect(view.contentEl.textContent).toContain(
+      "Source-note Markdown preview truncated",
+    );
+    expect(
+      [...view.contentEl.querySelectorAll("button")].some(
+        (button) => button.textContent === "Save source note",
+      ),
+    ).toBe(true);
+    const save = [...view.contentEl.querySelectorAll("button")].find(
+      (button) => button.textContent === "Save source note",
+    );
+    save?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(createdPath).toBe(writablePlan.targetPath);
+    expect(createdContent).toBe(noteContent);
+    expect(createdContent?.length).toBe(noteContent.length);
+    expect(createdContent?.endsWith("😀tail")).toBe(true);
+    await view.onClose();
+  });
+
+  it("fails closed with the exact diagnostic and zero source I/O on an unsupported platform", async () => {
+    const item = conversation(0);
+    const result = importResult([item]);
+    const controller = new ImportController(() => Promise.resolve(result));
+    let adapterCalls = 0;
+    const view = new Chat2VaultView({} as never, controller, () => 25, {
+      sourceRoot: () => "Sources",
+      sourceRootPending: () => false,
+      settingsGeneration: () => 0,
+      sourceWriterPlatformEligible: () => false,
+      createAdapter: () => {
+        adapterCalls += 1;
+        return { plan: async () => ({}) } as never;
+      },
+      registerInvalidator: () => () => undefined,
+    });
+    document.body.append(view.contentEl);
+    await view.onOpen();
+    await controller.import([
+      {
+        name: "synthetic.json",
+        size: 1,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)),
+      },
+    ]);
+    view.contentEl.querySelector<HTMLButtonElement>(".c2v-row")?.click();
+    expect(
+      [...view.contentEl.querySelectorAll("button")].some(
+        (button) => button.textContent === "Preview source note",
+      ),
+    ).toBe(false);
+    expect(view.contentEl.textContent).toContain(
+      "UNSUPPORTED_SOURCE_WRITER_PLATFORM: Source-note writing is not qualified on this operating system in M03.",
+    );
+    expect(adapterCalls).toBe(0);
     await view.onClose();
   });
 });

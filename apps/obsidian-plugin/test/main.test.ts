@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { beforeAll, describe, expect, it } from "vitest";
 import type { App } from "obsidian";
-import Chat2VaultPlugin from "../src/main.js";
+import Chat2VaultPlugin, {
+  resolveNativePluginDirectory,
+  sourceWriterPlatformEligible,
+} from "../src/main.js";
 import { Chat2VaultView, VIEW_TYPE } from "../src/view.js";
 
 beforeAll(() => {
@@ -49,6 +52,30 @@ beforeAll(() => {
 });
 
 describe("plugin command lifecycle", () => {
+  it.each([
+    ["darwin", "x64", true],
+    ["darwin", "arm64", false],
+    ["win32", "x64", false],
+    ["linux", "x64", false],
+  ] as const)("gates source writing for %s/%s", (platform, arch, expected) => {
+    expect(sourceWriterPlatformEligible(platform, arch)).toBe(expected);
+  });
+
+  it("validates every external plugin-directory input before fallback concatenation", () => {
+    expect(
+      resolveNativePluginDirectory(undefined, "bad\ud800config", "plugin"),
+    ).toBeUndefined();
+    expect(
+      resolveNativePluginDirectory(undefined, ".obsidian", "bad\ud800id"),
+    ).toBeUndefined();
+    expect(
+      resolveNativePluginDirectory("bad\ud800dir", ".obsidian", "plugin"),
+    ).toBeUndefined();
+    expect(resolveNativePluginDirectory(undefined, ".obsidian", "plugin")).toBe(
+      ".obsidian/plugins/plugin",
+    );
+  });
+
   it("registers without auto-opening, reuses one leaf, and validates only after reveal", async () => {
     const manifest = {
       id: "chat-to-vault",
@@ -109,15 +136,17 @@ describe("plugin command lifecycle", () => {
       id: "import-chatgpt-export",
       name: "Import ChatGPT export",
     });
-    plugin.settings = { schemaVersion: 1, previewMessagesPerPage: 50 };
-    await plugin.saveSettings();
+    await plugin.savePreviewMessagesPerPage(50);
+    await plugin.saveSourceRoot("Sources");
     expect(harness.savedData).toEqual({
-      schemaVersion: 1,
+      schemaVersion: 2,
       previewMessagesPerPage: 50,
+      sourceRoot: "Sources",
     });
     expect(Object.keys(harness.savedData as object)).toEqual([
       "schemaVersion",
       "previewMessagesPerPage",
+      "sourceRoot",
     ]);
     harness.commands[0]?.callback();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -129,6 +158,99 @@ describe("plugin command lifecycle", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(getLeafCalls).toBe(1);
     expect(revealCalls).toBe(2);
+    const realView = leaves[0]?.realView as unknown as
+      { loaded: boolean; sourceGeneration: number } | undefined;
+    expect(realView?.loaded).toBe(true);
+    const generationBeforeUnload = realView?.sourceGeneration;
     plugin.onunload();
+    expect(realView?.loaded).toBe(false);
+    expect(realView?.sourceGeneration).toBe((generationBeforeUnload ?? 0) + 1);
   });
+
+  it.each([
+    [
+      '{"schemaVersion":1,"previewMessagesPerPage":10}\n',
+      { schemaVersion: 1, previewMessagesPerPage: 10 },
+    ],
+    [
+      '{"schemaVersion":2,"previewMessagesPerPage":25,"sourceRoot":"Sources/Café"}\n',
+      {
+        schemaVersion: 2,
+        previewMessagesPerPage: 25,
+        sourceRoot: "Sources/Cafe\u0301",
+      },
+    ],
+    [
+      '{"schemaVersion":2,"previewMessagesPerPage":25,"sourceRoot":"../escape"}\n',
+      { schemaVersion: 2, previewMessagesPerPage: 25, sourceRoot: "../escape" },
+    ],
+    ['{"schemaVersion":', undefined],
+    [
+      '{"schemaVersion":99,"future":{"kept":true}}\n',
+      { schemaVersion: 99, future: { kept: true } },
+    ],
+  ] as const)(
+    "leaves pre-existing load-only data.json bytes identical for fixture %#",
+    async (rawBytes, parsed) => {
+      const plugin = new Chat2VaultPlugin({} as App, {
+        id: "chat-to-vault",
+        name: "Chat2Vault",
+        version: "0.3.0",
+        minAppVersion: "1.7.4",
+        description: "test",
+        author: "test",
+        isDesktopOnly: true,
+      });
+      let persistedBytes: string = rawBytes;
+      let saves = 0;
+      plugin.loadData = () => Promise.resolve(parsed);
+      plugin.saveData = (value: unknown) => {
+        saves += 1;
+        persistedBytes = `${JSON.stringify(value)}\n`;
+        return Promise.resolve();
+      };
+      await plugin.onload();
+      expect(persistedBytes).toBe(rawBytes);
+      expect(saves).toBe(0);
+      plugin.onunload();
+    },
+  );
+
+  it.each(["fulfill", "reject"] as const)(
+    "replaces unsupported future-schema bytes only after an explicit v2 save that will %s",
+    async (settlement) => {
+      const original = '{"schemaVersion":99,"future":{"kept":true}}\n';
+      let persistedBytes = original;
+      const plugin = new Chat2VaultPlugin({} as App, {
+        id: "chat-to-vault",
+        name: "Chat2Vault",
+        version: "0.3.0",
+        minAppVersion: "1.7.4",
+        description: "test",
+        author: "test",
+        isDesktopOnly: true,
+      });
+      plugin.loadData = () =>
+        Promise.resolve({ schemaVersion: 99, future: { kept: true } });
+      plugin.saveData = (value: unknown) => {
+        if (settlement === "reject")
+          return Promise.reject(new Error("synthetic persistence failure"));
+        persistedBytes = `${JSON.stringify(value)}\n`;
+        return Promise.resolve();
+      };
+      await plugin.onload();
+      expect(persistedBytes).toBe(original);
+      await expect(
+        plugin.savePreviewMessagesPerPage(50),
+      ).resolves.toMatchObject({
+        status: settlement === "fulfill" ? "saved" : "failed",
+      });
+      expect(persistedBytes).toBe(
+        settlement === "fulfill"
+          ? '{"schemaVersion":2,"previewMessagesPerPage":50,"sourceRoot":""}\n'
+          : original,
+      );
+      plugin.onunload();
+    },
+  );
 });

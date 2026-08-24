@@ -1,7 +1,9 @@
-import type {
-  CanonicalConversation,
-  CanonicalMessage,
-  ImportDiagnostic,
+import {
+  sourceWriterDiagnostic,
+  type CanonicalConversation,
+  type CanonicalMessage,
+  type ImportDiagnostic,
+  type SourceDescriptor,
 } from "@chat2vault/core";
 import { ItemView, WorkspaceLeaf } from "obsidian";
 import type {
@@ -20,8 +22,29 @@ import {
   type PreviewState,
 } from "./model.js";
 import { renderText } from "./render.js";
+import {
+  SourceWriteController,
+  type SourcePreviewResult,
+  type SourceWriteExecutionResult,
+} from "./source-controller.js";
+import { executeSourceWrite } from "./source-executor.js";
+import type { ObsidianSourceMutationAdapter } from "./source-vault-adapter.js";
 
 export const VIEW_TYPE = "chat-to-vault-preview";
+
+export interface SourceViewServices {
+  sourceRoot(): string;
+  sourceRootPending(): boolean;
+  settingsGeneration(): number;
+  sourceWriterPlatformEligible(): boolean;
+  createAdapter(
+    source: SourceDescriptor,
+    conversation: CanonicalConversation,
+  ): ObsidianSourceMutationAdapter;
+  registerInvalidator(
+    invalidator: (reason: "settings" | "unload") => void,
+  ): () => void;
+}
 
 export class Chat2VaultView extends ItemView {
   private readonly conversationOrder = new ConversationOrderCache();
@@ -33,12 +56,75 @@ export class Chat2VaultView extends ItemView {
   private selected: CanonicalConversation | undefined;
   private lastState: PreviewState | undefined;
   private chooseButton: HTMLButtonElement | undefined;
+  private sourceDescriptor: SourceDescriptor | undefined;
+  private sourceController: SourceWriteController | undefined;
+  private sourcePreviewResult: SourcePreviewResult | undefined;
+  private sourceSaveResult: SourceWriteExecutionResult | undefined;
+  private sourceBusy = false;
+  private sourceGeneration = 0;
+  private loaded = true;
+  private unregisterSourceInvalidator?: () => void;
   public constructor(
     leaf: WorkspaceLeaf,
     private readonly controller: ImportController,
     private readonly pageSize: () => 10 | 25 | 50,
+    private readonly sourceServices?: SourceViewServices,
   ) {
     super(leaf);
+    if (sourceServices !== undefined) {
+      this.sourceController = new SourceWriteController(
+        () => ({
+          loaded: this.loaded,
+          generation:
+            this.sourceGeneration + sourceServices.settingsGeneration(),
+          selectedConversationContentFingerprint:
+            this.selected?.contentFingerprint,
+          settledSourceRoot: sourceServices.sourceRoot(),
+          sourceRootPending: sourceServices.sourceRootPending(),
+        }),
+        async () => {
+          if (
+            this.sourceDescriptor === undefined ||
+            this.selected === undefined
+          )
+            throw new Error("No source selection");
+          return sourceServices
+            .createAdapter(this.sourceDescriptor, this.selected)
+            .plan();
+        },
+        async (request, token, current) => {
+          if (
+            this.sourceDescriptor === undefined ||
+            this.selected === undefined
+          )
+            return {
+              status: "stale",
+              acceptedFolderPaths: [],
+              diagnostics: [
+                {
+                  code: "STALE_SOURCE_WRITE_PLAN",
+                  severity: "error",
+                  message:
+                    "The source-note plan became stale before the write could complete.",
+                },
+              ],
+            };
+          return executeSourceWrite(
+            request,
+            token,
+            current,
+            sourceServices.createAdapter(this.sourceDescriptor, this.selected),
+          );
+        },
+      );
+      this.unregisterSourceInvalidator = sourceServices.registerInvalidator(
+        (reason) => {
+          if (reason === "unload") this.loaded = false;
+          this.invalidateSourceState(reason === "unload");
+          this.draw(this.controller.snapshot);
+        },
+      );
+    }
   }
   public getViewType(): string {
     return VIEW_TYPE;
@@ -50,12 +136,16 @@ export class Chat2VaultView extends ItemView {
     return { version: 1 };
   }
   public override onOpen(): Promise<void> {
+    this.loaded = true;
     this.unsubscribe = this.controller.subscribe((snapshot) =>
       this.draw(snapshot),
     );
     return Promise.resolve();
   }
   public override onClose(): Promise<void> {
+    this.loaded = false;
+    this.invalidateSourceState();
+    this.unregisterSourceInvalidator?.();
     this.unsubscribe?.();
     this.controller.close();
     this.contentEl.ondragover = null;
@@ -79,6 +169,7 @@ export class Chat2VaultView extends ItemView {
     const stateChanged = snapshot.state !== this.lastState;
     this.lastState = snapshot.state;
     if (snapshot.state === "reading") {
+      this.invalidateSourceState();
       this.selected = undefined;
       this.query = "";
       this.conversationPage = 1;
@@ -115,6 +206,7 @@ export class Chat2VaultView extends ItemView {
     choose.disabled =
       snapshot.state === "reading" || snapshot.state === "parsing";
     this.button(actions, "Clear", () => {
+      this.invalidateSourceState();
       this.selected = undefined;
       this.query = "";
       this.conversationPage = 1;
@@ -158,6 +250,7 @@ export class Chat2VaultView extends ItemView {
       error.setAttr("aria-live", "assertive");
     }
     if (snapshot.result === undefined) {
+      this.sourceDescriptor = undefined;
       root.createEl("p", {
         cls: "c2v-empty",
         text:
@@ -170,6 +263,7 @@ export class Chat2VaultView extends ItemView {
       if (stateChanged) this.focusState(snapshot.state);
       return;
     }
+    this.sourceDescriptor = snapshot.result.source;
     this.drawResult(
       root,
       snapshot.result.conversations,
@@ -241,6 +335,7 @@ export class Chat2VaultView extends ItemView {
       if (severity !== undefined)
         row.createEl("span", { text: ` · ${severity}` });
       row.addEventListener("click", () => {
+        if (this.selected !== conversation) this.invalidateSourceState();
         this.selected = conversation;
         this.messagePage = 1;
         this.draw(this.controller.snapshot);
@@ -298,6 +393,147 @@ export class Chat2VaultView extends ItemView {
     this.pager(parent, page.page, page.pages, (next) => {
       this.messagePage = next;
     });
+    this.drawSourceActions(parent);
+  }
+
+  private invalidateSourceState(incrementGeneration = true): void {
+    if (incrementGeneration) this.sourceGeneration += 1;
+    this.sourceController?.invalidate();
+    this.sourcePreviewResult = undefined;
+    this.sourceSaveResult = undefined;
+  }
+
+  private drawSourceActions(parent: HTMLElement): void {
+    const controller = this.sourceController;
+    if (controller === undefined) return;
+    const panel = parent.createEl("section", { cls: "c2v-source" });
+    panel.createEl("h4", { text: "Source preservation" });
+    panel.createEl("p", {
+      text: "Preview is read-only. Save explicitly creates a new source note and never modifies an existing note.",
+    });
+    const pending = this.sourceServices?.sourceRootPending() === true;
+    const sourceRoot = this.sourceServices?.sourceRoot() ?? "";
+    const platformEligible =
+      this.sourceServices?.sourceWriterPlatformEligible() === true;
+    panel.createEl("p", {
+      text:
+        sourceRoot === ""
+          ? "Source folder: not configured"
+          : `Source folder: ${sourceRoot}`,
+    });
+    if (pending)
+      panel.createEl("p", {
+        cls: "c2v-error",
+        text: "The source folder setting is still being saved; wait for it to settle before previewing or saving a source note.",
+      });
+    if (!platformEligible) {
+      const diagnostic = sourceWriterDiagnostic(
+        "UNSUPPORTED_SOURCE_WRITER_PLATFORM",
+      );
+      panel.createEl("p", {
+        cls: "c2v-error",
+        text: `${diagnostic.code}: ${diagnostic.message}`,
+      });
+    }
+    const actions = panel.createDiv({ cls: "c2v-actions" });
+    const previewEligible =
+      this.loaded &&
+      !pending &&
+      platformEligible &&
+      sourceRoot !== "" &&
+      this.selected?.provider === "chatgpt" &&
+      this.sourceDescriptor?.provider === "chatgpt";
+    if (previewEligible) {
+      const previewButton = this.button(actions, "Preview source note", () => {
+        void this.previewSource();
+      });
+      previewButton.disabled = this.sourceBusy;
+    }
+    const installed = controller.installedPreview;
+    if (
+      installed !== undefined &&
+      (installed.plan.disposition === "new" ||
+        installed.plan.disposition === "new-version")
+    ) {
+      const saveButton = this.button(actions, "Save source note", () => {
+        void this.saveSource();
+      });
+      saveButton.disabled = pending || this.sourceBusy;
+    }
+    const result = this.sourceSaveResult ?? this.sourcePreviewResult;
+    if (result !== undefined) {
+      panel.createEl("p", { text: `Source action: ${result.status}` });
+      if ("createdPath" in result)
+        panel.createEl("p", { text: `Saved path: ${result.createdPath}` });
+      if ("plan" in result) this.drawSourcePlan(panel, result.plan);
+      if ("diagnostics" in result)
+        for (const diagnostic of result.diagnostics)
+          panel.createEl("p", {
+            cls: diagnostic.severity === "error" ? "c2v-error" : "",
+            text: `${diagnostic.code}: ${diagnostic.message}`,
+          });
+    }
+  }
+
+  private drawSourcePlan(
+    parent: HTMLElement,
+    plan: import("@chat2vault/core").SourceWritePlan,
+  ): void {
+    parent.createEl("p", { text: `Disposition: ${plan.disposition}` });
+    for (const diagnostic of plan.diagnostics)
+      parent.createEl("p", {
+        cls: diagnostic.severity === "error" ? "c2v-error" : "",
+        text: `${diagnostic.code}: ${diagnostic.message}`,
+      });
+    if (plan.disposition === "duplicate") {
+      parent.createEl("p", { text: `Existing source: ${plan.existingPath}` });
+      parent.createEl("p", {
+        text: `All duplicate sources: ${plan.duplicatePaths.join(", ")}`,
+      });
+      return;
+    }
+    if (plan.disposition !== "new" && plan.disposition !== "new-version")
+      return;
+    parent.createEl("p", { text: `Target: ${plan.targetPath}` });
+    if (plan.disposition === "new-version")
+      parent.createEl("p", {
+        text: `Previous versions: ${plan.previousVersionPaths.join(", ")}`,
+      });
+    const display = this.sourceController?.installedPreview?.display;
+    if (display === undefined) return;
+    parent.createEl("p", {
+      text:
+        display.completeness === "complete"
+          ? "Complete source-note Markdown preview."
+          : "Source-note Markdown preview truncated; showing a prefix of at most 65,536 UTF-16 code units.",
+    });
+    const code = parent.createEl("pre").createEl("code");
+    code.textContent = display.text;
+  }
+
+  private async previewSource(): Promise<void> {
+    if (this.sourceController === undefined) return;
+    this.sourceBusy = true;
+    this.sourceSaveResult = undefined;
+    this.draw(this.controller.snapshot);
+    try {
+      this.sourcePreviewResult = await this.sourceController.preview();
+    } finally {
+      this.sourceBusy = false;
+      this.draw(this.controller.snapshot);
+    }
+  }
+
+  private async saveSource(): Promise<void> {
+    if (this.sourceController === undefined) return;
+    this.sourceBusy = true;
+    this.draw(this.controller.snapshot);
+    try {
+      this.sourceSaveResult = await this.sourceController.save();
+    } finally {
+      this.sourceBusy = false;
+      this.draw(this.controller.snapshot);
+    }
   }
   private drawMessage(
     parent: HTMLElement,
