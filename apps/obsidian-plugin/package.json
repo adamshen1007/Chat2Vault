@@ -1,10 +1,11 @@
 {
   "name": "@chat2vault/obsidian-plugin",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "main": "main.js",
   "scripts": {
-    "build": "node esbuild.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "build": "pnpm build:native && node esbuild.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

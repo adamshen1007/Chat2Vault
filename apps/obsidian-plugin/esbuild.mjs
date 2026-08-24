@@ -4,7 +4,7 @@ import esbuild from "esbuild";
 
 const common = {
   bundle: true,
-  external: ["obsidian"],
+  external: ["obsidian", "../native/source_observer.node"],
   format: "cjs",
   platform: "node",
   target: "node20",

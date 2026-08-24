@@ -72,6 +72,12 @@
   overflow: auto;
   white-space: pre-wrap;
 }
+.c2v-source pre {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
 .c2v-diagnostics {
   border-top: 1px solid var(--c2v-rule);
   padding-top: var(--size-4-3);

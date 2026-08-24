@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import process from "node:process";
 import { URL } from "node:url";
 import ts from "typescript";
@@ -38,6 +38,20 @@ const forbiddenNames = new Set([
   "console",
 ]);
 const failures = [];
+const mainSourceText = readFileSync(join(sourceRoot, "main.ts"), "utf8");
+
+if (
+  !/export function sourceWriterPlatformEligible\([\s\S]*?platform === "darwin" && arch === "x64";/u.test(
+    mainSourceText,
+  )
+)
+  failures.push("source writer production eligibility must require darwin/x64");
+if (
+  !mainSourceText.includes(
+    "sourceWriterPlatformEligible(process.platform, process.arch)",
+  )
+)
+  failures.push("source writer view gate must use the production predicate");
 
 for (const file of files) {
   const source = ts.createSourceFile(
@@ -49,10 +63,31 @@ for (const file of files) {
   const visit = (node) => {
     if (
       ts.isImportDeclaration(node) &&
-      ts.isStringLiteral(node.moduleSpecifier) &&
-      forbiddenImports.test(node.moduleSpecifier.text)
-    )
-      failures.push(`${file}: forbidden import ${node.moduleSpecifier.text}`);
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      const moduleName = node.moduleSpecifier.text;
+      if (moduleName === "node:fs/promises") {
+        const allowedByFile = new Map([
+          ["containment.ts", new Set(["lstat", "realpath"])],
+          ["native-observer.ts", new Set(["lstat", "realpath"])],
+          ["source-vault-adapter.ts", new Set(["readdir"])],
+        ]);
+        const imports = node.importClause?.namedBindings;
+        const names =
+          imports !== undefined && ts.isNamedImports(imports)
+            ? imports.elements.map((element) => element.name.text)
+            : [];
+        const allowed = allowedByFile.get(basename(file));
+        if (
+          allowed === undefined ||
+          names.length === 0 ||
+          names.some((name) => !allowed.has(name))
+        )
+          failures.push(`${file}: unauthorized native read import`);
+      } else if (forbiddenImports.test(moduleName)) {
+        failures.push(`${file}: forbidden import ${moduleName}`);
+      }
+    }
     if (
       ts.isCallExpression(node) &&
       node.expression.kind === ts.SyntaxKind.ImportKeyword
@@ -83,14 +118,30 @@ for (const file of files) {
       ].includes(node.name.text)
     )
       failures.push(`${file}: forbidden property ${node.name.text}`);
-    if (
-      ts.isPropertyAccessExpression(node) &&
-      ["create", "modify", "delete", "rename", "trash", "copy"].includes(
-        node.name.text,
-      ) &&
-      /(?:vault|adapter)/iu.test(node.expression.getText(source))
-    )
-      failures.push(`${file}: forbidden vault mutation ${node.name.text}`);
+    if (ts.isPropertyAccessExpression(node)) {
+      const vaultMutations = [
+        "create",
+        "createFolder",
+        "modify",
+        "delete",
+        "rename",
+        "trash",
+        "copy",
+      ];
+      if (
+        vaultMutations.includes(node.name.text) &&
+        /(?:vault|adapter|\bio\b)/iu.test(node.expression.getText(source))
+      ) {
+        const fileName = basename(file);
+        const allowed =
+          (fileName === "source-vault-adapter.ts" &&
+            ["create", "createFolder"].includes(node.name.text)) ||
+          (fileName === "source-executor.ts" &&
+            node.name.text === "createFolder");
+        if (!allowed)
+          failures.push(`${file}: forbidden vault mutation ${node.name.text}`);
+      }
+    }
     ts.forEachChild(node, visit);
   };
   visit(source);
@@ -143,7 +194,7 @@ const forbiddenBundlePatterns = [
   ["unsafe execution API", /\beval\s*\(|\bnew\s+Function\b/u],
   [
     "forbidden Node or Electron import",
-    /require\s*\(\s*["'](?:node:)?(?:fs(?:\/promises)?|http|https|http2|net|tls|dgram|dns|child_process|cluster|vm)(?:\/[^"']*)?["']\s*\)|require\s*\(\s*["']electron(?:\/[^"']*)?["']\s*\)/u,
+    /require\s*\(\s*["'](?:node:)?(?:fs(?!\/promises)|http|https|http2|net|tls|dgram|dns|child_process|cluster|vm)(?:\/[^"']*)?["']\s*\)|require\s*\(\s*["']electron(?:\/[^"']*)?["']\s*\)/u,
   ],
   ["hard-coded Obsidian config directory", /\.obsidian/u],
 ];
@@ -151,6 +202,34 @@ for (const bundle of bundles)
   for (const [label, pattern] of forbiddenBundlePatterns)
     if (pattern.test(bundle.text))
       failures.push(`${bundle.name} contains ${label}`);
+
+const nativeSource = readFileSync(
+  join(root, "native/source_observer.cc"),
+  "utf8",
+);
+const nativeBinary = readFileSync(join(root, "native/source_observer.node"));
+const nativeBinaryText = nativeBinary.toString("latin1");
+for (const required of [
+  "getattrlist",
+  "ATTR_CMN_RETURNED_ATTRS",
+  "ATTR_VOL_INFO",
+  "ATTR_VOL_MOUNTPOINT",
+  "FSOPT_NOFOLLOW_ANY",
+  "FSOPT_REPORT_FULLSIZE",
+  "FILE_ATTRIBUTE_REPARSE_POINT",
+  "GetFileAttributesW",
+  "FatalUtf8",
+  "rawMountBytesHex",
+])
+  if (!nativeSource.includes(required))
+    failures.push(`native observer missing ${required}`);
+if (/\b(?:mount|unmount|setattrlist)\s*\(/u.test(nativeSource))
+  failures.push("native observer exposes a forbidden filesystem mutation");
+if (
+  nativeBinaryText.includes(root) ||
+  /\/(?:Users|home)\//u.test(nativeBinaryText)
+)
+  failures.push("native observer contains an absolute user/build path");
 
 if (failures.length > 0) {
   process.stderr.write(`${failures.join("\n")}\n`);

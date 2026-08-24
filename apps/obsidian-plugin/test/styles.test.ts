@@ -26,5 +26,8 @@ describe("preview performance styles", () => {
     expect(styles).toMatch(
       /\.c2v-toolbar input\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s,
     );
+    expect(styles).toMatch(
+      /\.c2v-source pre\s*\{[^}]*box-sizing:\s*border-box;[^}]*width:\s*100%;[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto;/s,
+    );
   });
 });
