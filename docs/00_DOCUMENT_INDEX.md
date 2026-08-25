@@ -1,7 +1,7 @@
 # Chat2Vault Document Index
 
-Version: 0.7
-Status: M03 independently approved, merged, and post-merge verified; M04 not started
+Version: 0.8
+Status: M03 complete; M04 specification candidate under review, implementation not authorized
 Working name: Chat2Vault
 
 | Document                                   | Purpose                                                                                       |
@@ -23,6 +23,7 @@ Working name: Chat2Vault
 | `12_M03_IMPLEMENTATION_NOTES.md`           | M03 source registry/writer implementation, boundaries, artifacts, and verification            |
 | `13_M03_RUNTIME_GATE_REPORT.md`            | Historical pre-commit M03 automated/runtime evidence ledger and readiness decision            |
 | `14_M03_CLOSURE_REPORT.md`                 | Final independent verdict, publication chronology, post-merge verification, and M03 closure   |
+| `M04_SPEC.md`                              | Candidate M04 manual distillation contract, preview boundary, and acceptance gate             |
 | `../prompts/CODEX_M01_EXECUTION_PROMPT.md` | Consolidated Codex implementation prompt for Milestone 01                                     |
 | `../AGENTS.md`                             | Persistent repository governance for Codex/agents                                             |
 
@@ -54,3 +55,5 @@ For Milestone 03, the authority order is:
 9. `docs/06_OPEN_SOURCE_RELEASE_STRATEGY.md`
 
 `docs/M03_SPEC.md` must remain byte-identical. The amendment is not implementation authority until a genuinely independent review approves its exact bytes and SHA-256 with `GO — M03.1 SPEC AMENDMENT APPROVED`; after approval, its bytes must also remain exact.
+
+For Milestone 04, `docs/M04_SPEC.md` is a candidate only. No M04 implementation is authorized until a genuinely independent whole-spec review approves one exact byte sequence with `GO — M04 IMPLEMENTATION AUTHORIZED`, followed by explicit Product Owner implementation authorization.
