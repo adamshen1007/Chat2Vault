@@ -1,6 +1,6 @@
 # Milestone 04 Specification — Manual Distillation Contract and Candidate Preview
 
-Version: 0.2-candidate
+Version: 0.3-candidate
 
 Status: **NO-GO — specification remediation pending independent review; implementation not authorized**
 
@@ -95,12 +95,12 @@ Model-returned JSON is never repaired. The raw paste pipeline is total and order
 2. reject if the first UTF-16 code unit is exactly U+FEFF; U+FEFF elsewhere is ordinary JSON string data when the grammar permits it;
 3. reject any literal unpaired UTF-16 surrogate in the raw control value;
 4. measure `TextEncoder` UTF-8 bytes and reject values over `M04_RESULT_MAX_UTF8_BYTES`;
-5. tokenize and parse exactly one RFC 8259 JSON value, permitting only U+0009, U+000A, U+000D, and U+0020 as insignificant whitespace;
-6. reject duplicate member names at every object depth before value overwrite can occur;
+5. tokenize and parse exactly one RFC 8259 JSON value, permitting only U+0009, U+000A, U+000D, and U+0020 as insignificant whitespace; decode every object member name, validate its escapes and Unicode, and compare decoded names by exact Unicode-scalar sequence (equivalently, exact well-formed UTF-16 code-unit sequence);
+6. reject duplicate decoded member names at every object depth before inserting or overwriting any member, so raw `"requestId"` and `"\u0072equestId"` are the same member name;
 7. require the parsed root to be an object and recursively reject any decoded string containing an unpaired surrogate, including one produced by a `\uXXXX` escape;
 8. continue with exact-shape and policy validation.
 
-Leading or trailing permitted JSON whitespace is accepted. Fences, comments, commentary, multiple values, non-JSON numeric values, and trailing non-whitespace content fail. The implementation may use `JSON.parse` only after a duplicate-aware tokenizer/parser has accepted the same complete input; last-member-wins behavior is never authoritative.
+Leading or trailing permitted JSON whitespace is accepted. Fences, comments, commentary, multiple values, non-JSON numeric values, and trailing non-whitespace content fail. An invalid escape or literal/escaped unpaired surrogate fails `DISTILLATION_JSON_INVALID` before that token participates in duplicate comparison. The implementation may use `JSON.parse` only after a duplicate-aware tokenizer/parser has accepted the same complete input; last-member-wins behavior is never authoritative.
 
 ## 8. Fixed limits
 
@@ -175,9 +175,13 @@ interface DistillationTopology {
 }
 ```
 
-For `provider: "chatgpt"`, `metadata.chatgptGraph` must have exactly `nodeCount`, `selectedPathNodeIds`, `alternativeLeafNodeIds`, and `currentNodeId` with the M01 types and bounds. Each canonical message must have one unique non-empty `metadata.providerNodeId`. Build the observed-node set from those message node IDs, every present `parentMessageId`, both graph arrays, and non-null `currentNodeId`. Message nodes retain their `m` refs. Observed nodes without a canonical message receive `g000001`, `g000002`, … in ascending UTF-16 code-unit order of their raw node IDs; raw IDs are then discarded and never transmitted. `nodeCount` must be at least the observed-node count, and `unrepresentedNodeCount` is their difference. This preserves the fact that the importer saw additional graph nodes without inventing their unavailable edges or content.
+For `provider: "chatgpt"`, `metadata.chatgptGraph` must have exactly `nodeCount`, `selectedPathNodeIds`, `alternativeLeafNodeIds`, and `currentNodeId` with the M01 types and bounds. Each canonical message must have one unique non-empty `metadata.providerNodeId`.
 
-`selectedPath` and `alternativeLeaves` preserve their trusted metadata array order and map through the complete observed-node map. `current` is null when the source value is null and otherwise maps through that map. Each message entry’s parent is null when `parentMessageId` is absent and otherwise is the mapped `m` or `g` ref. `onSelectedPath` and `alternativeLeaf` are exact membership tests against the mapped arrays. A duplicate message node ID, graph count below the observed set, self-parent, or cycle among known message-parent edges fails request construction. An observed `g` ref is not provenance-bearing because it has no canonical message fingerprint.
+The **represented-node universe** contains only identities proven by frozen M01 output to be actual exported graph nodes: all message `providerNodeId` values, every `selectedPathNodeIds` value, and every `alternativeLeafNodeIds` value. A `parentMessageId` or `currentNodeId` does not prove node existence because M01 intentionally preserves absent orphan/current references. Message nodes retain their `m` refs. Represented nodes without a canonical message receive `g000001`, `g000002`, … in ascending UTF-16 code-unit order of their raw node IDs; raw IDs are then discarded and never transmitted. `nodeCount` must be at least the represented-universe size. `unrepresentedNodeCount` is `nodeCount - representedUniverse.size` and records actual exported nodes whose identities are unavailable in the canonical projection.
+
+`selectedPath` and `alternativeLeaves` preserve their trusted metadata array order and map through the represented-node map. Each message entry’s parent is null when `parentMessageId` is absent, the mapped `m` or `g` ref when that ID belongs to the represented-node universe, or exactly `"unresolved"` otherwise. `current` is null when source current is null, the mapped ref when it belongs to the represented universe, or exactly `"unresolved"` otherwise. Unresolved parent/current references do not receive `g` refs and do not participate in node-count accounting. `onSelectedPath` and `alternativeLeaf` are exact membership tests against the mapped arrays.
+
+Precedence is exact: malformed graph container/type/count/array values, duplicate represented message-node IDs, represented-universe size above `nodeCount`, self-parent to a represented node, or a cycle among resolved message-parent edges fails `DISTILLATION_REQUEST_INVALID`; only after those checks do absent parent/current identities settle as `"unresolved"`. Because selected-path and alternative-leaf values themselves prove represented membership under the frozen M01 contract, they never settle unresolved; an impossible mapping after graph validation is `DISTILLATION_REQUEST_INVALID`. A represented `g` ref is not provenance-bearing because it has no canonical message fingerprint.
 
 For `provider: "unknown"`, arbitrary metadata is not authority. `current` is null, both path arrays are empty, `unrepresentedNodeCount` is zero, and entries remain in canonical message order with `onSelectedPath: false` and `alternativeLeaf: false`; parent resolution uses a map of unique non-empty canonical `providerMessageId` values. A missing parent becomes `"unresolved"`; duplicate IDs, self-parent, or a cycle among resolved entries fails.
 
@@ -285,6 +289,24 @@ Validation stages are ordered:
 
 If a stage finds errors, later stages do not run. Within stages 3–6, collect every independently decidable error without reading invalidly typed descendants, then sort by canonical JSON Pointer path using UTF-16 code-unit order and by diagnostic code as a tie-breaker. If the sorted list has at most 50 entries, return it. If it has more, return the first 49 plus `DISTILLATION_DIAGNOSTIC_LIMIT` at path `""`. No partial candidate is installed.
 
+Diagnostic path and multiplicity are normative:
+
+| Violation                                                                                   | Diagnostic path                                                          | Multiplicity and code                                                                   |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| raw parse, BOM, duplicate decoded member name, invalid escape/Unicode, or non-object root   | `""`                                                                     | exactly one `DISTILLATION_JSON_INVALID`                                                 |
+| missing required member                                                                     | would-be property pointer, such as `/requestId` or `/candidates/2/title` | one `DISTILLATION_SHAPE_INVALID` per missing member                                     |
+| extra member                                                                                | actual extra-property pointer                                            | one `DISTILLATION_SHAPE_INVALID` per extra member                                       |
+| wrong JSON type, invalid enum, invalid/non-NFC/over-limit string, or wrong array type/count | offending field pointer                                                  | at most one field diagnostic, using the §19 stage code; type precedes descendant checks |
+| top-level `schemaVersion` or `contractVersion` mismatch                                     | exact scalar pointer                                                     | one `DISTILLATION_REQUEST_MISMATCH` per mismatched field                                |
+| top-level `requestId` or `conversationFingerprint` mismatch                                 | exact scalar pointer                                                     | one `DISTILLATION_REQUEST_MISMATCH` per mismatched field                                |
+| non-object candidate or a candidate-wide condition not attributable to one field            | candidate pointer, such as `/candidates/2`                               | one `DISTILLATION_SHAPE_INVALID` or `DISTILLATION_CANDIDATE_INVALID`, as mapped in §19  |
+| duplicate value in `sourceMessageFingerprints`                                              | pointer of each later duplicate array element                            | one `DISTILLATION_SOURCE_REF_INVALID` for each later occurrence only                    |
+| duplicate value in `suggestedLinks` or `suggestedTags`                                      | pointer of each later duplicate array element                            | one `DISTILLATION_CANDIDATE_INVALID` for each later occurrence only                     |
+| malformed or non-member source fingerprint                                                  | offending source array element pointer                                   | one `DISTILLATION_SOURCE_REF_INVALID` per offending element                             |
+| semantic duplicate candidate                                                                | pointer of each later duplicate candidate                                | one `DISTILLATION_DUPLICATE_CANDIDATE` for each later occurrence only                   |
+
+For a field that violates more than one scalar rule, emit only the first applicable condition in this precedence: JSON type, fixed constant or enum, Unicode/NFC/non-empty rule, UTF-16 limit, then UTF-8 limit. When several object fields independently fail, emit one diagnostic for each field in the interface field order before the canonical-path sort. Array descendants are inspected in ascending index order. A candidate object with field-addressable violations emits those field diagnostics, not an additional candidate-pointer summary. These rules make error counts and paths independent of implementation traversal strategy.
+
 Any accepted Validate entry clears the prior preview synchronously before stage 1. A Validate action rejected at controller entry because another operation owns the mutex is not an accepted validation attempt and does not clear the preview.
 
 ## 15. Exact trusted-candidate derivation
@@ -309,7 +331,7 @@ interface CandidateSemanticProjection {
 }
 ```
 
-`candidateFingerprint` is the stable fingerprint of `stableJson(semanticProjection)`. Candidate duplicates are equal candidate fingerprints, so response-order-only or set-array-order-only differences are duplicates. `id` is the stable fingerprint of `stableJson({requestId, candidateFingerprint})` in that key order.
+`candidateFingerprint` is exactly `"sha256:" + lowercaseHex(SHA256(UTF8(stableJson(semanticProjection))))`. Candidate duplicates are equal candidate fingerprints, so response-order-only or set-array-order-only differences are duplicates. `id` is exactly `"sha256:" + lowercaseHex(SHA256(UTF8(stableJson({requestId, candidateFingerprint}))))`, with the ID-input object keys in the shown order. Neither operation calls the baseline `fingerprint()` helper on an already serialized string. Golden fixtures must distinguish direct hashing of M04 stable-JSON bytes from baseline object-key sorting and from JSON-string re-encoding.
 
 Each installed preview item has exactly the domain `KnowledgeCandidate` keys plus an internal fingerprint:
 
@@ -433,11 +455,11 @@ Implementation verification must include formatting, lint, strict typecheck, ful
 
 Automated contracts must cover:
 
-- full canonical-message projection, branches, selected path, alternative leaves, ambiguous topology, explicit orphan representation, malformed graph, duplicate IDs, cycles, and unknown-provider linear projection;
-- request-core and request golden bytes/hashes, title-only identity changes, exact object-key ordering, literal prompt bytes/final LF, length frame, delimiter collisions, and instruction-like source data;
+- full canonical-message projection, branches, selected path, alternative leaves, ambiguous topology, explicit orphan representation, a one-message absent orphan parent, a non-null `currentNodeId` whose identity is absent from the represented universe, proof that unresolved references receive no `g` ref or node-count increment, malformed graph, duplicate IDs, cycles, and unknown-provider linear projection;
+- request-core and request golden bytes/hashes, title-only identity changes, exact object-key ordering, literal prompt bytes/final LF, length frame, delimiter collisions, instruction-like source data, and direct-byte candidate/ID hash goldens that fail under object-key sorting or serialized-string re-encoding;
 - every knowledge type and confidence value;
-- raw size ±1, leading U+FEFF, literal/escaped lone surrogates, accepted whitespace, malformed JSON, duplicate keys at every depth, fences, commentary, multiple values, and trailing content;
-- missing/extra keys, wrong constants, empty arrays, every field/count boundary ±1, non-NFC strings, uniqueness, semantic set ordering, and exact derived candidate/SourceRef golden objects;
+- raw size ±1, leading U+FEFF, literal/escaped lone surrogates, accepted whitespace, malformed JSON, duplicate keys at every depth including raw `"requestId"` plus decoded-equivalent `"\u0072equestId"` at top level and nested depth, invalid-escape/surrogate precedence, fences, commentary, multiple values, and trailing content;
+- missing/extra keys, wrong constants, empty arrays, every field/count boundary ±1, non-NFC strings, uniqueness, semantic set ordering, exact violation-to-path/multiplicity fixtures for every §14 row, diagnostic-limit truncation, and exact derived candidate/SourceRef golden objects;
 - forged, missing, duplicated, reordered, and over-limit source references;
 - all arbitration-table cells, accepted/rejected Validate preview clearing, invalidation at every asynchronous boundary, final pre-clipboard stale fence, and post-invocation invalidation;
 - clipboard denial/failure and proof of no automatic clipboard read;
