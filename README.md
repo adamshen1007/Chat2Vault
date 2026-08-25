@@ -4,11 +4,11 @@ Chat2Vault is a local-first tool for turning AI conversations into source-linked
 
 ## Current status
 
-Milestone 03 is under implementation and independent gate review. It extends the deterministic M01 import core and M02 desktop preview plugin with an explicit, create-only source-note writer for one selected ChatGPT conversation.
+Milestone 03 is complete and merged. It extends the deterministic M01 import core and M02 desktop preview plugin with an explicit, create-only source-note writer for one selected ChatGPT conversation.
 
 The writer has no default destination. The user must configure a vault-relative source root, run `Preview source note`, and explicitly invoke `Save source note`. It derives registry identity from direct-child Chat2Vault Markdown notes, detects exact duplicates, creates immutable new versions for changed conversation content, checks physical containment, and verifies created bytes and registry rediscovery. Existing source notes are never modified, renamed, deleted, or overwritten.
 
-M03 still does **not** call an AI or network provider, use provider APIs, automate a browser, synthesize knowledge, write knowledge notes, support mobile/Linux source writing, or implement M04 behavior. The Product Owner selected a macOS x86_64-only M03.1 scope and deferred Windows plus non-x86_64 macOS packaging to a separately approved compatibility milestone. The exact scope amendment is independently approved, production eligibility and packaging are aligned to it, and genuine host-level Electron zoom evidence passes on both retained macOS rows. Commit readiness remains blocked only on final independent whole-candidate review.
+M03 still does **not** call an AI or network provider, use provider APIs, automate a browser, synthesize knowledge, write knowledge notes, support mobile/Linux source writing, or implement M04 behavior. The Product Owner selected a macOS x86_64-only M03.1 scope and deferred Windows plus non-x86_64 macOS packaging to a separately approved compatibility milestone. The exact scope amendment and implementation candidate received the required independent approvals, production eligibility and packaging are aligned to the amended scope, and genuine host-level Electron zoom evidence passes on both retained macOS rows. Pull request #1 merged M03 into the repository's then-default branch on 2026-08-24; the post-merge quality gate passed again.
 
 ## Development
 
@@ -35,7 +35,7 @@ pnpm build
 
 The import core is in `packages/core`; the plugin is in `apps/obsidian-plugin`. Synthetic fixtures live in `fixtures/chatgpt`.
 
-The plugin build currently produces `apps/obsidian-plugin/main.js`, `worker.js`, and a macOS x86_64 read-only source-containment observer. Install those files together with `manifest.json` and `styles.css` only in a disposable matching environment. M02 evidence remains in [M02 implementation notes](docs/09_M02_IMPLEMENTATION_NOTES.md); the approved [M03.1 macOS scope amendment](docs/M03_MACOS_SCOPE_AMENDMENT.md), [M03 implementation notes](docs/12_M03_IMPLEMENTATION_NOTES.md), and [M03 runtime gate report](docs/13_M03_RUNTIME_GATE_REPORT.md) record the active governance and readiness state.
+The plugin build currently produces `apps/obsidian-plugin/main.js`, `worker.js`, and a macOS x86_64 read-only source-containment observer. Install those files together with `manifest.json` and `styles.css` only in a disposable matching environment. M02 evidence remains in [M02 implementation notes](docs/09_M02_IMPLEMENTATION_NOTES.md); the approved [M03.1 macOS scope amendment](docs/M03_MACOS_SCOPE_AMENDMENT.md), [M03 implementation notes](docs/12_M03_IMPLEMENTATION_NOTES.md), historical [M03 runtime gate report](docs/13_M03_RUNTIME_GATE_REPORT.md), and [M03 closure report](docs/14_M03_CLOSURE_REPORT.md) record the complete governance and readiness chronology.
 
 ## Privacy
 

@@ -1,7 +1,7 @@
 # Chat2Vault Document Index
 
-Version: 0.6
-Status: M03.1 macOS-only amendment approved and implementation/runtime aligned; final independent review pending
+Version: 0.7
+Status: M03 independently approved, merged, and post-merge verified; M04 not started
 Working name: Chat2Vault
 
 | Document                                   | Purpose                                                                                       |
@@ -21,7 +21,8 @@ Working name: Chat2Vault
 | `M03_SPEC.md`                              | Independently approved and byte-frozen Milestone 03 implementation authority                  |
 | `M03_MACOS_SCOPE_AMENDMENT.md`             | Independently approved M03.1 macOS-only platform/runtime/acceptance amendment                 |
 | `12_M03_IMPLEMENTATION_NOTES.md`           | M03 source registry/writer implementation, boundaries, artifacts, and verification            |
-| `13_M03_RUNTIME_GATE_REPORT.md`            | M03 automated/runtime evidence ledger, gaps, and current readiness decision                   |
+| `13_M03_RUNTIME_GATE_REPORT.md`            | Historical pre-commit M03 automated/runtime evidence ledger and readiness decision            |
+| `14_M03_CLOSURE_REPORT.md`                 | Final independent verdict, publication chronology, post-merge verification, and M03 closure   |
 | `../prompts/CODEX_M01_EXECUTION_PROMPT.md` | Consolidated Codex implementation prompt for Milestone 01                                     |
 | `../AGENTS.md`                             | Persistent repository governance for Codex/agents                                             |
 
