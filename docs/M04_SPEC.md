@@ -1,6 +1,6 @@
 # Milestone 04 Specification — Manual Distillation Contract and Candidate Preview
 
-Version: 0.5-candidate
+Version: 0.6-candidate
 
 Status: **NO-GO — specification remediation pending independent review; implementation not authorized**
 
@@ -306,7 +306,7 @@ Diagnostic path and multiplicity are normative:
 | non-object candidate or a candidate-wide condition not attributable to one field          | candidate pointer, such as `/candidates/2`                               | one `DISTILLATION_SHAPE_INVALID` or `DISTILLATION_CANDIDATE_INVALID`, as mapped in §19 |
 | duplicate value in `sourceMessageFingerprints`                                            | pointer of each later duplicate array element                            | one `DISTILLATION_SOURCE_REF_INVALID` for each later occurrence only                   |
 | duplicate value in `suggestedLinks` or `suggestedTags`                                    | pointer of each later duplicate array element                            | one `DISTILLATION_CANDIDATE_INVALID` for each later occurrence only                    |
-| malformed or non-member source fingerprint                                                | offending source array element pointer                                   | one `DISTILLATION_SOURCE_REF_INVALID` per offending element                            |
+| invalid `sourceMessageFingerprints[j]` element type, malformed fingerprint, or non-member | exact source array-element pointer                                       | one `DISTILLATION_SOURCE_REF_INVALID` per offending element                            |
 | semantic duplicate candidate                                                              | pointer of each later duplicate candidate                                | one `DISTILLATION_DUPLICATE_CANDIDATE` for each later occurrence only                  |
 
 For a field that violates more than one scalar rule, emit only the first applicable condition in this precedence: JSON type, fixed constant or enum, Unicode/NFC/non-empty rule, UTF-16 limit, then UTF-8 limit. When several object fields independently fail, emit one diagnostic for each field in the interface field order before the canonical-path sort. Array descendants are inspected in ascending index order. A candidate object with field-addressable violations emits those field diagnostics, not an additional candidate-pointer summary. These rules make error counts and paths independent of implementation traversal strategy.
@@ -377,13 +377,16 @@ External invalidation events synchronously increment the relevant generation, in
 - active conversation fingerprint change;
 - view close or plugin unload.
 
-Releasing ownership on invalidation permits an immediately requested operation to make a fresh entry decision against the new state. An invalidated unsettled operation never reacquires ownership. Every settlement path may clear the current owner only when `activeOwner.token === settlingToken`; a stale token must not clear, replace, render into, or otherwise modify a newer owner's state.
+Releasing ownership on invalidation permits an immediately requested operation to make a fresh entry decision against the new state. An invalidated unsettled operation never reacquires ownership.
 
-Every asynchronous settlement uses this exact precedence after the underlying step fulfills, throws, or rejects:
+Every synchronous return/throw and asynchronous fulfillment/rejection is one operation completion path and uses this exact total settlement algorithm:
 
 1. compare the settling token and all captured identity/generation values with current controller state;
-2. if any comparison is stale, return only `DISTILLATION_STALE_OPERATION`, perform no installation or success rendering, and release ownership only under the token-equality rule above; the fulfilled value or thrown/rejected value does not change this result;
-3. if still current, classify the fulfilled or thrown/rejected result under the operation-specific rules, perform any permitted atomic installation, and release ownership only under the same token-equality rule.
+2. if any comparison is stale, return only `DISTILLATION_STALE_OPERATION`; the stale completion is return-only and must not install, clear, replace, render, or otherwise alter any controller or UI state, regardless of whether a newer owner exists; the underlying returned, thrown, fulfilled, or rejected value does not change this result;
+3. if still current, classify the returned, thrown, fulfilled, or rejected result under the operation-specific rules, atomically settle its permitted success or failure result and UI/state changes, then release ownership exactly once by clearing `activeOwner` only when `activeOwner.token === settlingToken`;
+4. no other path may clear ownership, and a settling token that does not equal `activeOwner.token` must not clear or replace that owner.
+
+The completion algorithm applies equally to synchronous Prepare construction/validation failures, synchronous Prepare success, synchronous Validate parse/validation failures, synchronous Validate success, and every asynchronous boundary. A current completion therefore cannot retain `{ kind, token }` after returning its result. External-invalidation UI and textarea-input UI are the winning states over any later stale completion; specifically, the empty state or newer input status they rendered remains unchanged even when no newer operation owner exists.
 
 Thus stale status takes precedence over clipboard denial or failure when invalidation occurs after clipboard invocation but before settlement. A current `NotAllowedError` rejection remains denial, a current other throw/rejection remains failure, and a current fulfillment follows the Copy success path.
 
@@ -395,7 +398,7 @@ Copy performs a final synchronous current-token, generation, request-ID, fingerp
 
 ## 17. User interface and inert rendering
 
-The selected-conversation view adds a “Manual distillation” panel. Prepare state displays contract version, safe conversation title, conversation fingerprint, complete-message count, and exact prompt bytes. “Copy prompt” is enabled only for a current prepared request and requires explicit activation.
+The selected-conversation view adds a “Manual distillation” panel. Prepare state displays contract version, safe conversation title, conversation fingerprint, complete-message count, and exact prompt bytes. “Copy prompt” is enabled only for a current prepared request and requires explicit activation. Before or adjacent to Copy, visible text states that the prompt contains the complete selected conversation and, after a successful Copy, remains in the system clipboard until the user, another application, or the operating system replaces or clears it.
 
 Paste uses a plain `<textarea>` with visible height `16rem`, vertical `overflow: auto`, horizontal wrapping, `spellcheck=false`, and an accessible byte-count/status description. Every textarea input event first increments `pasteGeneration`, invalidates and releases a current Validate owner under the §16 token rule, and clears the installed preview; Prepare and Copy tokens are unaffected. Controller paste state retains at most `M04_RESULT_MAX_UTF8_BYTES`. An input event exceeding that limit then atomically clears the control and controller string, sets an over-limit latch, and displays `DISTILLATION_RESULT_TOO_LARGE`; it never retains or truncates a prefix. A non-over-limit input atomically installs that exact string and clears the latch. An old Validate settlement after either kind of input is stale and cannot install, render diagnostics, clear a newer owner, or replace the input status. “Validate result” is explicit and disabled when the control is empty or over-limit. The plugin never reads clipboard content automatically.
 
@@ -451,13 +454,13 @@ interface M04Diagnostic {
 | `DISTILLATION_STALE_OPERATION`      | The distillation operation became stale and was discarded.               |
 | `DISTILLATION_DIAGNOSTIC_LIMIT`     | Additional validation errors were omitted.                               |
 
-Stage mapping is exact: controller/operation failures use the matching controller code; raw syntax, BOM, duplicate-key, raw/decoded surrogate, or root-JSON failures use `DISTILLATION_JSON_INVALID`; over-limit raw input uses `DISTILLATION_RESULT_TOO_LARGE`; exact-key/type/count failures use `DISTILLATION_SHAPE_INVALID`; constant or active identity mismatch uses `DISTILLATION_REQUEST_MISMATCH`; candidate enum/string/suggestion failures use `DISTILLATION_CANDIDATE_INVALID`; provenance failures use `DISTILLATION_SOURCE_REF_INVALID`; semantic duplicates use `DISTILLATION_DUPLICATE_CANDIDATE`.
+Stage mapping is exact and the §14 violation table is authoritative. Controller/operation failures use the matching controller code. Raw syntax, BOM, duplicate-key, raw/decoded surrogate, or root-JSON failures use `DISTILLATION_JSON_INVALID`; over-limit raw input uses `DISTILLATION_RESULT_TOO_LARGE`. An object member or array container with the wrong JSON type, an exact-key failure, or an array count failure uses `DISTILLATION_SHAPE_INVALID` at the pointer specified by §14. A `suggestedLinks[j]` or `suggestedTags[j]` element with the wrong JSON type or any semantic string violation uses `DISTILLATION_CANDIDATE_INVALID` at that exact element pointer. A `sourceMessageFingerprints[j]` element with the wrong JSON type, malformed fingerprint, duplicate value, or non-member value uses `DISTILLATION_SOURCE_REF_INVALID` at the exact pointer specified by §14. Constant or active identity mismatch uses `DISTILLATION_REQUEST_MISMATCH`; other candidate enum/string failures use `DISTILLATION_CANDIDATE_INVALID`; semantic duplicates use `DISTILLATION_DUPLICATE_CANDIDATE`. These categories are non-overlapping.
 
 Logs may include code, operation token, safe counts, byte lengths, and duration, but no prompt, transcript, pasted JSON, candidate content, candidate titles, provider IDs, or file/vault paths.
 
 ## 20. Privacy and side-effect boundary
 
-M04 persists no new setting and no request/result/candidate data. All state is memory-only and cleared on view close or plugin unload.
+M04 persists no new setting and no request/result/candidate data. All Chat2Vault-owned internal M04 state is memory-only and cleared on view close or plugin unload. A successful explicit Copy places the complete prompt in OS-managed clipboard state whose lifetime is outside Chat2Vault. M04 does not automatically read, restore, or clear that external clipboard state on view close, plugin unload, or application exit; doing so could overwrite clipboard content subsequently written by the user or another application.
 
 Production M04 code contains no `fetch`, `requestUrl`, XMLHttpRequest, WebSocket, EventSource, `sendBeacon`, browser resource element creation, provider SDK, dynamic remote import, child-process invocation, or new network dependency. Copying to the system clipboard is the only outbound data action and occurs only after the explicit current-request fence in §16.
 
@@ -473,11 +476,11 @@ Automated contracts must cover:
 - request-core and request golden bytes/hashes, title-only identity changes, exact object-key ordering, literal prompt bytes/final LF, length frame, delimiter collisions, instruction-like source data, two transcripts whose different `J` values produce different exact `N` fields while preserving identical literal instruction/delimiter bytes and valid framing, and direct-byte candidate/ID hash goldens that fail under object-key sorting or serialized-string re-encoding;
 - every knowledge type and confidence value;
 - raw size ±1, leading U+FEFF, literal/escaped lone surrogates, accepted whitespace, malformed JSON, duplicate keys at every depth including raw `"requestId"` plus decoded-equivalent `"\u0072equestId"` at top level and nested depth, invalid-escape/surrogate precedence, fences, commentary, multiple values, and trailing content;
-- missing/extra keys, wrong constants, empty arrays, every field/count boundary ±1, non-NFC strings, uniqueness, semantic set ordering, a UTF-16 comparator golden containing BMP and supplementary-plane values whose Unicode-scalar order differs, exact container-versus-element path/code/cap goldens for invalid `suggestedLinks` and `suggestedTags` types, counts, element types, Unicode/NFC, emptiness, UTF-16/UTF-8 limits, and later duplicates, exact violation-to-path/multiplicity fixtures for every §14 row, diagnostic-limit truncation, and exact derived candidate/SourceRef golden objects;
+- missing/extra keys, wrong constants, empty arrays, every field/count boundary ±1, non-NFC strings, uniqueness, semantic set ordering, a UTF-16 comparator golden containing BMP and supplementary-plane values whose Unicode-scalar order differs, exact container-versus-element path/code/cap goldens for invalid `suggestedLinks` and `suggestedTags` types, counts, element types, Unicode/NFC, emptiness, UTF-16/UTF-8 limits, and later duplicates, wrong-type element fixtures for `suggestedLinks`, `suggestedTags`, and `sourceMessageFingerprints`, exact violation-to-path/multiplicity fixtures for every §14 row, diagnostic-limit truncation, and exact derived candidate/SourceRef golden objects;
 - forged, missing, duplicated, reordered, and over-limit source references;
-- all arbitration-table cells, accepted/rejected Validate preview clearing, invalidation at every asynchronous boundary, immediate subsequent entry after ownership release, token-guarded stale settlement after a newer owner starts, final pre-clipboard stale fence, and the full post-invocation Copy cross-product of current/stale × fulfillment/`NotAllowedError`/generic rejection;
+- all arbitration-table cells, synchronous Prepare success/failure ownership release, synchronous Validate success/failure ownership release, accepted/rejected Validate preview clearing, invalidation at every asynchronous boundary, immediate subsequent entry after ownership release, token-guarded stale settlement after a newer owner starts, stale-after-invalidation with no newer owner and exact UI/status suppression, final pre-clipboard stale fence, and the full post-invocation Copy cross-product of current/stale × fulfillment/`NotAllowedError`/generic rejection;
 - normal edit, clear, and over-limit input during Validate at every asynchronous boundary, including exact `pasteGeneration`/input-snapshot fencing, immediate subsequent entry, old-result suppression, and preservation of a newer owner's state/status;
-- clipboard denial/failure fault injection for exact `NotAllowedError` `DOMException`, differently named `DOMException`, normal `Error`, and non-Error rejection, plus proof of no automatic clipboard read;
+- clipboard denial/failure fault injection for exact `NotAllowedError` `DOMException`, differently named `DOMException`, normal `Error`, and non-Error rejection, plus proof of no automatic clipboard read/restore/clear and exact user-visible clipboard-lifetime disclosure;
 - inert rendering of Markdown, HTML, embeds, wikilinks, remote URLs, and hostile text;
 - pagination, keyboard and screen-reader labels, plus the exact §18 harness predicate;
 - M01–M03 regression verification.
@@ -500,29 +503,29 @@ No-vault-mutation evidence directly instruments every `Vault`, `Adapter`, and `F
 
 ## 22. Acceptance criteria
 
-| ID    | Criterion                                                                                                                                                                                                       |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AC-01 | One complete canonical conversation, including every message and its trusted topology projection, produces one deterministic request or one closed diagnostic.                                                  |
-| AC-02 | Request ID and exact LF-only prompt bytes/final LF are reproducible and change on any prompt-semantic input change.                                                                                             |
-| AC-03 | Length framing proves imported bytes cannot inject, overwrite, terminate, or extend literal trusted instruction/delimiter structure; application-computed `N` always equals the exact inserted `J` byte length. |
-| AC-04 | Oversized prompts fail with no truncation, chunking, clipboard access, or installed request.                                                                                                                    |
-| AC-05 | Clipboard write requires explicit activation plus the final current-request fence; automatic clipboard read never occurs.                                                                                       |
-| AC-06 | Only the total §7 strict-JSON pipeline with exact keys and no duplicate members or invalid Unicode is accepted.                                                                                                 |
-| AC-07 | All ten knowledge types and three confidence values round-trip.                                                                                                                                                 |
-| AC-08 | Every accepted candidate references at least one fingerprint from any real message in the complete active request.                                                                                              |
-| AC-09 | Forged, duplicate, missing, malformed, reordered-set, or over-limit provenance follows the exact validation and canonicalization rules.                                                                         |
-| AC-10 | Candidate IDs, status, semantic identity, and the single exact `SourceRef` are derived locally.                                                                                                                 |
-| AC-11 | Candidates equal under the canonical semantic projection fail as duplicates.                                                                                                                                    |
-| AC-12 | An accepted invalid paste clears prior preview, emits deterministic bounded diagnostics, and cannot install partial candidates.                                                                                 |
-| AC-13 | Selection/import/request/view changes and Validate input-generation changes invalidate stale work at every asynchronous boundary, including the final clipboard fence.                                          |
-| AC-14 | Every Prepare/Copy/Validate arbitration cell returns the specified result with no queue or replay.                                                                                                              |
-| AC-15 | Preview is inert, read-only, state-bounded, paginated, accessible, and passes the exact 100%/200% host-zoom contract.                                                                                           |
-| AC-16 | M04 state is memory-only and absent from settings, vault files, and content-bearing logs.                                                                                                                       |
-| AC-17 | Static checks plus both attributed runtime layers prove zero M04 network activity on both required rows.                                                                                                        |
-| AC-18 | Instrumented mutation surfaces plus manifests prove zero M04 vault mutation on both required rows.                                                                                                              |
-| AC-19 | M01–M03 semantics and full verification remain green.                                                                                                                                                           |
-| AC-20 | No M05+ behavior, release work, or unsupported platform claim is introduced.                                                                                                                                    |
-| AC-21 | Exact approved-spec hash, complete implementation evidence, and independent whole-candidate review produce exact `GO — M04 COMMIT READY` before any publication decision.                                       |
+| ID    | Criterion                                                                                                                                                                                                          |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| AC-01 | One complete canonical conversation, including every message and its trusted topology projection, produces one deterministic request or one closed diagnostic.                                                     |
+| AC-02 | Request ID and exact LF-only prompt bytes/final LF are reproducible and change on any prompt-semantic input change.                                                                                                |
+| AC-03 | Length framing proves imported bytes cannot inject, overwrite, terminate, or extend literal trusted instruction/delimiter structure; application-computed `N` always equals the exact inserted `J` byte length.    |
+| AC-04 | Oversized prompts fail with no truncation, chunking, clipboard access, or installed request.                                                                                                                       |
+| AC-05 | Clipboard write requires explicit activation plus the final current-request fence; the complete-conversation clipboard lifetime is disclosed, and automatic read, restore, or clear never occurs.                  |
+| AC-06 | Only the total §7 strict-JSON pipeline with exact keys and no duplicate members or invalid Unicode is accepted.                                                                                                    |
+| AC-07 | All ten knowledge types and three confidence values round-trip.                                                                                                                                                    |
+| AC-08 | Every accepted candidate references at least one fingerprint from any real message in the complete active request.                                                                                                 |
+| AC-09 | Forged, duplicate, missing, malformed, reordered-set, or over-limit provenance follows the exact validation and canonicalization rules.                                                                            |
+| AC-10 | Candidate IDs, status, semantic identity, and the single exact `SourceRef` are derived locally.                                                                                                                    |
+| AC-11 | Candidates equal under the canonical semantic projection fail as duplicates.                                                                                                                                       |
+| AC-12 | An accepted invalid paste clears prior preview, emits deterministic bounded diagnostics, and cannot install partial candidates.                                                                                    |
+| AC-13 | Selection/import/request/view changes and Validate input-generation changes invalidate stale work at every completion boundary, including the final clipboard fence; stale completion is return-only.              |
+| AC-14 | Every Prepare/Copy/Validate arbitration cell and synchronous/asynchronous completion path returns the specified result, releases current ownership exactly once, and has no queue or replay.                       |
+| AC-15 | Preview is inert, read-only, state-bounded, paginated, accessible, and passes the exact 100%/200% host-zoom contract.                                                                                              |
+| AC-16 | Chat2Vault-owned M04 state is memory-only and absent from settings, vault files, and content-bearing logs; explicitly copied OS clipboard state is external and is never automatically read, restored, or cleared. |
+| AC-17 | Static checks plus both attributed runtime layers prove zero M04 network activity on both required rows.                                                                                                           |
+| AC-18 | Instrumented mutation surfaces plus manifests prove zero M04 vault mutation on both required rows.                                                                                                                 |
+| AC-19 | M01–M03 semantics and full verification remain green.                                                                                                                                                              |
+| AC-20 | No M05+ behavior, release work, or unsupported platform claim is introduced.                                                                                                                                       |
+| AC-21 | Exact approved-spec hash, complete implementation evidence, and independent whole-candidate review produce exact `GO — M04 COMMIT READY` before any publication decision.                                          |
 
 ## 23. Required evidence and implementation review gate
 
