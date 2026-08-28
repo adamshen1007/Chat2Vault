@@ -1,4 +1,6 @@
 import {
+  M04_CONTRACT_VERSION,
+  M04_RESULT_MAX_UTF8_BYTES,
   sourceWriterDiagnostic,
   type CanonicalConversation,
   type CanonicalMessage,
@@ -29,6 +31,16 @@ import {
 } from "./source-controller.js";
 import { executeSourceWrite } from "./source-executor.js";
 import type { ObsidianSourceMutationAdapter } from "./source-vault-adapter.js";
+import {
+  ManualDistillationController,
+  type ManualDistillationServices,
+  type ManualOperationResult,
+} from "./distillation-controller.js";
+import {
+  distillationPage,
+  distillationPageCount,
+  type DistillationPageSize,
+} from "./distillation-model.js";
 
 export const VIEW_TYPE = "chat-to-vault-preview";
 
@@ -44,6 +56,13 @@ export interface SourceViewServices {
   registerInvalidator(
     invalidator: (reason: "settings" | "unload") => void,
   ): () => void;
+}
+
+export interface ManualDistillationViewServices extends Pick<
+  ManualDistillationServices,
+  "writeClipboard" | "buildRequest" | "renderPrompt" | "validateResult"
+> {
+  registerInvalidator?(invalidator: () => void): () => void;
 }
 
 export class Chat2VaultView extends ItemView {
@@ -64,11 +83,18 @@ export class Chat2VaultView extends ItemView {
   private sourceGeneration = 0;
   private loaded = true;
   private unregisterSourceInvalidator?: () => void;
+  private distillationController?: ManualDistillationController;
+  private selectionGeneration = 0;
+  private importGeneration = 0;
+  private distillationPage = 1;
+  private distillationPageSize: DistillationPageSize = 10;
+  private unregisterDistillationInvalidator?: () => void;
   public constructor(
     leaf: WorkspaceLeaf,
     private readonly controller: ImportController,
     private readonly pageSize: () => 10 | 25 | 50,
     private readonly sourceServices?: SourceViewServices,
+    distillationServices?: ManualDistillationViewServices,
   ) {
     super(leaf);
     if (sourceServices !== undefined) {
@@ -125,6 +151,35 @@ export class Chat2VaultView extends ItemView {
         },
       );
     }
+    if (distillationServices !== undefined) {
+      this.distillationController = new ManualDistillationController({
+        current: () => ({
+          loaded: this.loaded,
+          selectionGeneration: this.selectionGeneration,
+          importGeneration: this.importGeneration,
+          ...(this.selected === undefined
+            ? {}
+            : { conversation: this.selected }),
+        }),
+        writeClipboard: (text) => distillationServices.writeClipboard(text),
+        ...(distillationServices.buildRequest === undefined
+          ? {}
+          : { buildRequest: distillationServices.buildRequest }),
+        ...(distillationServices.renderPrompt === undefined
+          ? {}
+          : { renderPrompt: distillationServices.renderPrompt }),
+        ...(distillationServices.validateResult === undefined
+          ? {}
+          : { validateResult: distillationServices.validateResult }),
+      });
+      const unregister = distillationServices.registerInvalidator?.(() => {
+        this.loaded = false;
+        this.invalidateDistillation(true, true);
+        this.draw(this.controller.snapshot);
+      });
+      if (unregister !== undefined)
+        this.unregisterDistillationInvalidator = unregister;
+    }
   }
   public getViewType(): string {
     return VIEW_TYPE;
@@ -145,7 +200,9 @@ export class Chat2VaultView extends ItemView {
   public override onClose(): Promise<void> {
     this.loaded = false;
     this.invalidateSourceState();
+    this.invalidateDistillation(true, true);
     this.unregisterSourceInvalidator?.();
+    this.unregisterDistillationInvalidator?.();
     this.unsubscribe?.();
     this.controller.close();
     this.contentEl.ondragover = null;
@@ -166,10 +223,13 @@ export class Chat2VaultView extends ItemView {
     return button;
   }
   private draw(snapshot: ImportSnapshot): void {
+    if (this.distillationController?.invalidateIfConversationChanged() === true)
+      this.distillationPage = 1;
     const stateChanged = snapshot.state !== this.lastState;
     this.lastState = snapshot.state;
     if (snapshot.state === "reading") {
       this.invalidateSourceState();
+      if (stateChanged) this.invalidateDistillation(false, true);
       this.selected = undefined;
       this.query = "";
       this.conversationPage = 1;
@@ -207,6 +267,7 @@ export class Chat2VaultView extends ItemView {
       snapshot.state === "reading" || snapshot.state === "parsing";
     this.button(actions, "Clear", () => {
       this.invalidateSourceState();
+      this.invalidateDistillation(true, true);
       this.selected = undefined;
       this.query = "";
       this.conversationPage = 1;
@@ -300,7 +361,10 @@ export class Chat2VaultView extends ItemView {
       const selectionCleared =
         this.selected !== undefined &&
         !filterConversations([this.selected], this.query).length;
-      if (selectionCleared) this.selected = undefined;
+      if (selectionCleared) {
+        this.selected = undefined;
+        this.invalidateDistillation(true, false);
+      }
       this.draw(this.controller.snapshot);
       const target = selectionCleared
         ? this.contentEl.querySelector<HTMLElement>(".c2v-list")
@@ -335,7 +399,10 @@ export class Chat2VaultView extends ItemView {
       if (severity !== undefined)
         row.createEl("span", { text: ` · ${severity}` });
       row.addEventListener("click", () => {
-        if (this.selected !== conversation) this.invalidateSourceState();
+        if (this.selected !== conversation) {
+          this.invalidateSourceState();
+          this.invalidateDistillation(true, false);
+        }
         this.selected = conversation;
         this.messagePage = 1;
         this.draw(this.controller.snapshot);
@@ -393,7 +460,184 @@ export class Chat2VaultView extends ItemView {
     this.pager(parent, page.page, page.pages, (next) => {
       this.messagePage = next;
     });
+    this.drawManualDistillation(parent);
     this.drawSourceActions(parent);
+  }
+
+  private invalidateDistillation(
+    selectionChanged: boolean,
+    importChanged: boolean,
+  ): void {
+    if (selectionChanged) this.selectionGeneration += 1;
+    if (importChanged) this.importGeneration += 1;
+    this.distillationPage = 1;
+    this.distillationController?.invalidate();
+  }
+
+  private drawManualDistillation(parent: HTMLElement): void {
+    const controller = this.distillationController;
+    if (controller === undefined) return;
+    const snapshot = controller.snapshot;
+    const panel = parent.createEl("section", { cls: "c2v-distillation" });
+    panel.createEl("h4", { text: "Manual distillation" });
+    panel.createEl("p", {
+      text: "Prepare a bounded prompt from the complete selected conversation, run it in an AI tool you choose, then paste strict JSON here. Nothing is sent automatically.",
+    });
+    panel.createEl("p", {
+      cls: "c2v-clipboard-disclosure",
+      text: "The copied prompt contains the complete selected conversation and remains in the system clipboard until the user, another application, or the operating system replaces or clears it.",
+    });
+    const prepareActions = panel.createDiv({ cls: "c2v-actions" });
+    const prepare = this.button(prepareActions, "Prepare prompt", () => {
+      void this.runManualOperation(() => controller.prepare());
+    });
+    prepare.setAttr("aria-label", "Prepare manual prompt");
+    prepare.disabled = snapshot.owner !== undefined;
+    const copy = this.button(prepareActions, "Copy prompt", () => {
+      void this.runManualOperation(() => controller.copy());
+    });
+    copy.setAttr("aria-label", "Copy prompt");
+    copy.disabled =
+      snapshot.owner !== undefined ||
+      snapshot.request === undefined ||
+      snapshot.prompt === undefined;
+    if (snapshot.request !== undefined) {
+      const title = snapshot.request.title ?? "Untitled conversation";
+      const details = panel.createEl("dl", { cls: "c2v-distillation-meta" });
+      for (const [term, value] of [
+        ["Contract", M04_CONTRACT_VERSION],
+        ["Conversation", title],
+        ["Fingerprint", snapshot.request.conversationFingerprint],
+        ["Complete messages", String(snapshot.request.messages.length)],
+        ["Prompt bytes", String(snapshot.promptBytes ?? 0)],
+      ] as const) {
+        details.createEl("dt", { text: term });
+        details.createEl("dd", { text: value });
+      }
+    }
+    const pasteDescriptionId = "c2v-distillation-paste-status";
+    const textarea = panel.createEl("textarea", {
+      cls: "c2v-distillation-paste",
+    });
+    textarea.value = snapshot.paste;
+    textarea.spellcheck = false;
+    textarea.wrap = "soft";
+    textarea.setAttr("aria-label", "Paste strict JSON");
+    textarea.setAttr("aria-describedby", pasteDescriptionId);
+    textarea.setAttr("placeholder", "Paste strict JSON result");
+    textarea.addEventListener("input", () => {
+      controller.setPaste(textarea.value);
+      this.distillationPage = 1;
+      this.draw(this.controller.snapshot);
+      this.contentEl
+        .querySelector<HTMLTextAreaElement>('[aria-label="Paste strict JSON"]')
+        ?.focus();
+    });
+    const pasteStatus = panel.createEl("p", {
+      cls: "c2v-distillation-status",
+      text: snapshot.pasteOverLimit
+        ? `Result exceeds the ${String(M04_RESULT_MAX_UTF8_BYTES)}-byte limit and was cleared.`
+        : `${String(snapshot.pasteBytes)} / ${String(M04_RESULT_MAX_UTF8_BYTES)} UTF-8 bytes · ${snapshot.status}`,
+    });
+    pasteStatus.id = pasteDescriptionId;
+    pasteStatus.setAttr("role", "status");
+    pasteStatus.setAttr("aria-live", "polite");
+    const validateActions = panel.createDiv({ cls: "c2v-actions" });
+    const validate = this.button(validateActions, "Validate result", () => {
+      void this.runManualOperation(() => controller.validate());
+    });
+    validate.setAttr("aria-label", "Validate result");
+    validate.disabled =
+      snapshot.owner !== undefined ||
+      snapshot.request === undefined ||
+      snapshot.paste === "" ||
+      snapshot.pasteOverLimit;
+    if (snapshot.diagnostics.length > 0) {
+      const diagnostics = panel.createEl("div", {
+        cls: "c2v-distillation-diagnostics",
+      });
+      diagnostics.setAttr("aria-label", "Distillation diagnostics");
+      for (const diagnostic of snapshot.diagnostics)
+        diagnostics.createEl("p", {
+          cls: "c2v-error",
+          text: `${diagnostic.code}${diagnostic.path === "" ? "" : ` at ${diagnostic.path}`}: ${diagnostic.message}`,
+        });
+    }
+    this.drawDistillationCandidates(panel);
+  }
+
+  private drawDistillationCandidates(parent: HTMLElement): void {
+    const candidates = this.distillationController?.snapshot.candidates ?? [];
+    if (candidates.length === 0) return;
+    const pages = distillationPageCount(
+      candidates.length,
+      this.distillationPageSize,
+    );
+    this.distillationPage = Math.min(this.distillationPage, pages);
+    const controls = parent.createDiv({ cls: "c2v-distillation-controls" });
+    const label = controls.createEl("label", { text: "Candidates per page" });
+    const select = label.createEl("select");
+    select.setAttr("aria-label", "Candidates per page");
+    for (const size of [10, 25, 50] as const) {
+      const option = select.createEl("option", { text: String(size) });
+      option.value = String(size);
+      option.selected = size === this.distillationPageSize;
+    }
+    select.addEventListener("change", () => {
+      const size = Number(select.value);
+      if (size === 10 || size === 25 || size === 50)
+        this.distillationPageSize = size;
+      this.distillationPage = 1;
+      this.draw(this.controller.snapshot);
+    });
+    const list = parent.createEl("section", {
+      cls: "c2v-candidate-preview",
+    });
+    list.setAttr("aria-label", "Validated knowledge candidates");
+    const page = distillationPage(
+      candidates,
+      this.distillationPage,
+      this.distillationPageSize,
+    );
+    for (const candidate of page) {
+      const item = list.createEl("article", { cls: "c2v-candidate" });
+      item.createEl("h5", { text: candidate.title });
+      item.createEl("p", {
+        cls: "c2v-meta",
+        text: `${candidate.type} · ${candidate.confidence} · proposed`,
+      });
+      item.createEl("p", { text: candidate.summary });
+      item.createEl("pre").createEl("code", { text: candidate.body });
+      item.createEl("p", {
+        text: `Sources: ${candidate.sourceRefs[0].messageFingerprints.join(", ")}`,
+      });
+      item.createEl("p", {
+        text: `Suggested links: ${candidate.suggestedLinks.join(", ") || "none"}`,
+      });
+      item.createEl("p", {
+        text: `Suggested tags: ${candidate.suggestedTags.join(", ") || "none"}`,
+      });
+    }
+    this.pager(list, this.distillationPage, pages, (next) => {
+      this.distillationPage = next;
+    });
+  }
+
+  private async runManualOperation(
+    operation: () => Promise<ManualOperationResult>,
+  ): Promise<void> {
+    if (
+      this.distillationController?.invalidateIfConversationChanged() === true
+    ) {
+      this.distillationPage = 1;
+      if (this.loaded) this.draw(this.controller.snapshot);
+      return;
+    }
+    const pending = operation();
+    this.draw(this.controller.snapshot);
+    const operationResult = await pending;
+    if (!this.loaded || operationResult.status === "stale") return;
+    this.draw(this.controller.snapshot);
   }
 
   private invalidateSourceState(incrementGeneration = true): void {

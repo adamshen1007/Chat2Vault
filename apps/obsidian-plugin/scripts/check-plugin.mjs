@@ -26,7 +26,6 @@ const forbiddenNames = new Set([
   "sendBeacon",
   "caches",
   "serviceWorker",
-  "clipboard",
   "execCommand",
   "createWritable",
   "createSyncAccessHandle",
@@ -101,6 +100,19 @@ for (const file of files) {
       failures.push(`${file}: CommonJS require is forbidden in plugin source`);
     if (ts.isIdentifier(node) && forbiddenNames.has(node.text))
       failures.push(`${file}: forbidden API ${node.text}`);
+    if (ts.isIdentifier(node) && node.text === "clipboard") {
+      const property = node.parent;
+      const write = property?.parent;
+      const allowed =
+        basename(file) === "main.ts" &&
+        ts.isPropertyAccessExpression(property) &&
+        property.name === node &&
+        property.expression.getText(source) === "navigator" &&
+        ts.isPropertyAccessExpression(write) &&
+        write.expression === property &&
+        write.name.text === "writeText";
+      if (!allowed) failures.push(`${file}: forbidden clipboard API`);
+    }
     if (
       ts.isPropertyAccessExpression(node) &&
       [
@@ -190,7 +202,7 @@ const forbiddenBundlePatterns = [
     "unsafe DOM API",
     /\b(?:innerHTML|outerHTML|insertAdjacentHTML|srcdoc|DOMParser|createContextualFragment|MarkdownRenderer)\b/u,
   ],
-  ["clipboard API", /\b(?:clipboard|execCommand)\b/u],
+  ["automatic clipboard API", /\b(?:readText|execCommand)\b/u],
   ["unsafe execution API", /\beval\s*\(|\bnew\s+Function\b/u],
   [
     "forbidden Node or Electron import",
@@ -202,6 +214,12 @@ for (const bundle of bundles)
   for (const [label, pattern] of forbiddenBundlePatterns)
     if (pattern.test(bundle.text))
       failures.push(`${bundle.name} contains ${label}`);
+const clipboardWrites =
+  bundles[0].text.match(/\.clipboard\.writeText\(/gu) ?? [];
+if (clipboardWrites.length !== 1)
+  failures.push(
+    `main.js must contain exactly one explicit clipboard write (found ${String(clipboardWrites.length)})`,
+  );
 
 const nativeSource = readFileSync(
   join(root, "native/source_observer.cc"),
