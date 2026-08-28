@@ -4,7 +4,7 @@ Chat2Vault is a local-first tool for turning AI conversations into source-linked
 
 ## Current status
 
-Milestone 03 is complete and merged. Milestone 04 is an uncommitted, commit-ready implementation candidate on `codex/milestone-04-implementation`, built against the independently approved byte-frozen v0.6 specification. The two-row macOS runtime gate passed, and the exact v8 whole-candidate review returned `GO — M04 COMMIT READY`; commit and publication remain pending a separate Product Owner decision.
+Milestones 03 and 04 are complete and merged. M04 was built against the independently approved byte-frozen v0.6 specification, passed the two-row macOS runtime gate, and received the exact v8 whole-candidate verdict `GO — M04 COMMIT READY`. Pull request #3 merged the authorized implementation into `main` on 2026-08-28; no deployment, release, or M05 work followed.
 
 The writer has no default destination. The user must configure a vault-relative source root, run `Preview source note`, and explicitly invoke `Save source note`. It derives registry identity from direct-child Chat2Vault Markdown notes, detects exact duplicates, creates immutable new versions for changed conversation content, checks physical containment, and verifies created bytes and registry rediscovery. Existing source notes are never modified, renamed, deleted, or overwritten.
 
@@ -37,7 +37,7 @@ pnpm build
 
 The import core is in `packages/core`; the plugin is in `apps/obsidian-plugin`. Synthetic fixtures live in `fixtures/chatgpt`.
 
-The plugin build currently produces `apps/obsidian-plugin/main.js`, `worker.js`, and a macOS x86_64 read-only source-containment observer. Install those files together with `manifest.json` and `styles.css` only in a disposable matching environment. M02 evidence remains in [M02 implementation notes](docs/09_M02_IMPLEMENTATION_NOTES.md); the approved [M03.1 macOS scope amendment](docs/M03_MACOS_SCOPE_AMENDMENT.md), [M03 implementation notes](docs/12_M03_IMPLEMENTATION_NOTES.md), historical [M03 runtime gate report](docs/13_M03_RUNTIME_GATE_REPORT.md), and [M03 closure report](docs/14_M03_CLOSURE_REPORT.md) record the M03 chronology. The byte-frozen [M04 specification](docs/M04_SPEC.md), [M04 implementation notes](docs/15_M04_IMPLEMENTATION_NOTES.md), and [M04 runtime gate report](docs/16_M04_RUNTIME_GATE_REPORT.md) record the current candidate and its remaining independent-review gate.
+The plugin build currently produces `apps/obsidian-plugin/main.js`, `worker.js`, and a macOS x86_64 read-only source-containment observer. Install those files together with `manifest.json` and `styles.css` only in a disposable matching environment. M02 evidence remains in [M02 implementation notes](docs/09_M02_IMPLEMENTATION_NOTES.md); the approved [M03.1 macOS scope amendment](docs/M03_MACOS_SCOPE_AMENDMENT.md), [M03 implementation notes](docs/12_M03_IMPLEMENTATION_NOTES.md), historical [M03 runtime gate report](docs/13_M03_RUNTIME_GATE_REPORT.md), and [M03 closure report](docs/14_M03_CLOSURE_REPORT.md) record the M03 chronology. The byte-frozen [M04 specification](docs/M04_SPEC.md), historical [M04 implementation notes](docs/15_M04_IMPLEMENTATION_NOTES.md), historical [M04 runtime gate report](docs/16_M04_RUNTIME_GATE_REPORT.md), and [M04 closure report](docs/17_M04_CLOSURE_REPORT.md) record the complete M04 chronology.
 
 ## Privacy
 
