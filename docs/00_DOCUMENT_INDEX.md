@@ -1,7 +1,7 @@
 # Chat2Vault Document Index
 
-Version: 0.11
-Status: M03 and M04 complete and merged; no deployment, release, or M05 implementation performed
+Version: 0.12
+Status: M03 and M04 complete and merged; M05 specification candidate awaiting exact independent review
 Working name: Chat2Vault
 
 | Document                                   | Purpose                                                                                        |
@@ -27,6 +27,7 @@ Working name: Chat2Vault
 | `15_M04_IMPLEMENTATION_NOTES.md`           | M04 candidate implementation, automated evidence, AC ledger, and remaining runtime/review gate |
 | `16_M04_RUNTIME_GATE_REPORT.md`            | M04 two-row macOS runtime qualification, attributed evidence, and runtime decision             |
 | `17_M04_CLOSURE_REPORT.md`                 | Final independent verdict, publication chronology, post-merge verification, and M04 closure    |
+| `M05_SPEC.md`                              | Candidate M05 OpenAI-compatible cloud adapter specification and acceptance contract            |
 | `../prompts/CODEX_M01_EXECUTION_PROMPT.md` | Consolidated Codex implementation prompt for Milestone 01                                      |
 | `../AGENTS.md`                             | Persistent repository governance for Codex/agents                                              |
 
@@ -71,3 +72,5 @@ For Milestone 04, the authority order is:
 8. `docs/06_OPEN_SOURCE_RELEASE_STRATEGY.md`
 
 The exact v0.6 specification received `GO — M04 IMPLEMENTATION AUTHORIZED`, and the Product Owner explicitly authorized implementation. `docs/M04_SPEC.md` must remain byte-identical. The two-row runtime evidence and v8 whole-candidate packet received exact `GO — M04 COMMIT READY` on 2026-08-28. The Product Owner then separately authorized publication; pull request #3 merged the candidate into `main` at `09ecdd0c250e44060e597fd2777d52ae03e5fac3`. Deployment, release, and M05 remain outside M04 closure.
+
+For Milestone 05, `docs/M05_SPEC.md` is a candidate only. It becomes implementation authority only after exact-byte independent approval with `GO — M05 IMPLEMENTATION AUTHORIZED` and separate Product Owner implementation authorization. Until both occur, M05 implementation is NO-GO.
