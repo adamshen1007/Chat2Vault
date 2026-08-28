@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the remediated v0.2 candidate hash is `fba695d9e68e5a0620397e644e2da963748f2e3f7674a18f9b663b66145c0c31` and must be replaced in this plan if review changes the specification.
+- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the remediated v0.3 candidate hash is `c147055242175d57df31f0f06b697920c2da5ed6b4bf3d35015563b3406f03fc` and must be replaced in this plan if review changes the specification.
 - Baseline is M04 closure merge `2ac8f194adeca6de5cf2c227ca8213013455573e`.
 - Production eligibility is exactly macOS desktop x86_64.
 - Support one canonical DNS-hostname HTTPS `/v1/chat/completions` endpoint over pinned public IPv4, one model, and one credential derived from the persisted plugin-installation UUID.
@@ -257,7 +257,7 @@ expect(request).toEqual({
 });
 ```
 
-Add response cases for duplicate keys, `__proto__`, multiple choices, null content, BOM, invalid UTF-8, excessive nesting, and valid/malformed usage.
+Add response cases for duplicate keys, `__proto__`, multiple choices, null/array/missing content, BOM, invalid UTF-8, exact pure/mixed container depths 31/32/33, ignored provider-specific extras (including refusal/tool/function-call fields), and valid/malformed usage.
 
 - [ ] **Step 3: Run both focused files and confirm failure**
 
@@ -302,7 +302,7 @@ export function buildProviderRequest(
 }
 ```
 
-Extract the duplicate-aware JSON scanner from M04 into an internal shared utility without changing M04 public behavior or golden bytes. `parseProviderResponse(bytes)` must use fatal UTF-8, reject every §16 security condition, require exactly one choice/content string, and omit malformed usage while retaining valid content.
+Extract the duplicate-aware JSON scanner from M04 into an internal shared utility without changing M04 public behavior or golden bytes. `parseProviderResponse(bytes)` must use fatal UTF-8, reject every §16 security condition and entry into container depth 33, require exactly one choice/content string, ignore all provider-specific extra fields after global validation, and omit malformed usage while retaining valid content.
 
 - [ ] **Step 6: Run focused tests plus all core regressions and record the worktree checkpoint**
 
@@ -352,7 +352,7 @@ it("migrates exact v2 settings with an injected installation identity", () => {
 });
 ```
 
-Add deferred-persistence tests proving serialized saves, rollback, endpoint-change disclosure revocation, and generation increments only after success.
+Add deferred-persistence tests proving draft-only edits have no authoritative effects, every accepted five-field Save reserves the FIFO queue and synchronously advances `providerSaveGeneration`, a second provider Save while pending returns `PROVIDER_SETTINGS_SAVING` without effects, provider entry is prohibited while pending, successful persistence atomically advances `providerSettingsGeneration`, failed persistence restores only prior provider authority without reverting successful non-provider saves or reviving stale work, exact-value saves follow the same path, and endpoint draft changes revoke disclosure.
 
 - [ ] **Step 2: Run and confirm focused failure**
 
@@ -382,32 +382,32 @@ export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
 
 Reuse the existing safe-own-JSON traversal. Add an exact nested-key check, exact lowercase RFC 4122 v4/variant UUID validation, and injected `crypto.randomUUID()` generation only during migration/safe-default persistence. Never coerce or partially preserve malformed provider state; provider execution remains unavailable until a newly generated identity is persisted successfully.
 
-- [ ] **Step 4: Implement atomic provider save**
+- [ ] **Step 4: Implement the exact draft/save and two-generation algorithm**
 
 ```ts
-public async saveProviderSettings(value: ProviderSettings): Promise<SettingsSaveResult> {
-  if (!this.tryAcquire()) return this.inProgress();
-  const validated = validateStoredProviderSettings(value);
-  if (!validated.ok) return this.invalid("The provider setting is invalid.");
-  const previous = this.settings;
-  const endpointChanged = previous.provider.endpoint !== validated.value.endpoint;
-  const provider = endpointChanged
-    ? { ...validated.value, cloudDisclosureAccepted: false }
-    : validated.value;
-  const next = { ...previous, provider };
-  try {
-    await this.persist(next);
-    this.settings = next;
-    this.providerGeneration += 1;
-    this.invalidateProviderState();
-    return { status: "saved" };
-  } catch {
-    return { status: "failed", message: "The provider setting could not be saved." };
-  } finally {
-    this.release();
-  }
+public async saveProviderSettings(draft: ProviderSettings): Promise<SettingsSaveResult> {
+  const validated = validateProviderDraft(draft);
+  if (!validated.ok) return this.settingsInvalidWithoutSideEffects();
+  const previousProvider = this.settings.provider;
+  const saveGeneration = ++this.providerSaveGeneration;
+  this.invalidateProviderOwnerAndAbort();
+  this.installProviderSettingsSaving();
+  return this.settingsSaveQueue.run(async () => {
+    try {
+      const next = { ...this.settings, provider: validated.value };
+      await this.persist(next);
+      this.settings = next;
+      this.providerSettingsGeneration += 1;
+      return this.installPersistedProviderReadiness(saveGeneration);
+    } catch {
+      this.settings = { ...this.settings, provider: previousProvider };
+      return this.installProviderSettingsSaveFailed(saveGeneration);
+    }
+  });
 }
 ```
+
+The five controls modify only a draft; changing its endpoint forces draft disclosure false. No invalid draft or draft-only edit persists, increments a generation, or invalidates work. Capture both provider generations. Keep source-root save invalidation separate.
 
 - [ ] **Step 5: Run all settings tests and record the worktree checkpoint**
 
@@ -429,7 +429,7 @@ git diff --check
 **Interfaces:**
 
 - Consumes: validated visible-ASCII secret.
-- Produces: `configureKeychain`, `credentialStatus`, `readCredentialForOperation`, `setCredential`, `deleteCredential`, fixed service/derived-account contracts, exact ABI-1 validation, credential generation invalidation, and closed results.
+- Produces: `configureKeychain`, `credentialStatus`, `readCredentialForOperation`, `setCredential`, `deleteCredential`, fixed service/derived-account contracts, the observation/mutation mutex and state machine, exact ABI-1 validation, credential generation invalidation, and closed results.
 
 - [ ] **Step 1: Write failing wrapper-shape tests**
 
@@ -494,7 +494,7 @@ export function readCredentialForOperation(): CredentialReadResult {
 }
 ```
 
-No production export accepts service/account parameters. Before every valid mutation call, synchronously increment `credentialGeneration`, invalidate provider ownership, and set credential state `unknown`. Validate exact own data descriptors/keys/tags and Set/Delete effect cross-products. Cover every throw, extra/missing/accessor/symbol/prototype/wrong-ABI shape and both `mayHaveChanged` paths. Keep alternate-account binding only in the runtime-test source graph and statically exclude it from production.
+No production export accepts service/account parameters. Implement the exact §8 state machine: initial/load, view-open, and explicit-refresh observations; one non-queuing status/mutation mutex; invalid Set input with zero mutex/native/generation/state effects; pre-native generation invalidation for every valid mutation; prior-state restoration only for well-formed `mayHaveChanged: false`; and unknown state for indeterminate mutation outcomes until explicit Refresh. Treat the accepted-operation read as authoritative before DNS: changed missing/unavailable/malformed/throw/invalid-secret observations advance generation, invalidate/release the owner, and settle the old operation stale. Validate exact own data descriptors/keys/tags and Set/Delete effect cross-products. Cover every throw, extra/missing/accessor/symbol/prototype/wrong-ABI shape and both `mayHaveChanged` paths. Keep alternate-account binding only in the runtime-test source graph and statically exclude it from production.
 
 - [ ] **Step 4: Implement Security-framework operations**
 
@@ -551,6 +551,8 @@ expect(request).toHaveBeenCalledWith(
   expect.objectContaining({
     method: "POST",
     hostname: "api.example.com",
+    agent: false,
+    setHost: false,
     lookup: expect.any(Function),
     minVersion: "TLSv1.2",
     rejectUnauthorized: true,
@@ -562,7 +564,7 @@ expect(request).toHaveBeenCalledWith(
 
 - [ ] **Step 2: Add failing transport matrix**
 
-Cover empty DNS, 17 answers, duplicate/invalid-TTL/denied answers, resolver failure, IP-literal/IPv6 endpoint rejection, second-lookup attempt, TLS failure, 3xx, 401, 403, 429 with valid/invalid retry, 4xx, 5xx, content encoding, content type, oversized declared/chunked body, invalid UTF-8, explicit cancellation, each timeout phase, and late stream events.
+Cover empty DNS, 17 answers, duplicate/invalid-TTL/denied answers, resolver failure, IP-literal/IPv6 endpoint rejection, zero/second lookup, non-pinned connected peer, TLS failure, global/proxy Agent and environment-proxy attempts, pooled-socket reuse, automatic/extra headers, 3xx, 401, 403, 429 with valid/invalid retry, 4xx, 5xx, content encoding, content type, oversized declared/chunked body, invalid UTF-8, explicit cancellation, each timeout phase, and late stream events.
 
 - [ ] **Step 3: Run focused transport tests and confirm failure**
 
@@ -597,11 +599,11 @@ async function resolvePinned(
 }
 ```
 
-Pass a lookup callback that returns only this captured address with family 4 and increments a counter; fail if invoked more than once. Preserve canonical DNS hostname for SNI and `checkServerIdentity`.
+Pass a lookup callback that returns only this captured address with family 4 and increments a counter; fail unless invoked exactly once. Preserve canonical DNS hostname for SNI and explicit `checkServerIdentity`.
 
 - [ ] **Step 5: Implement bounded request/response lifecycle**
 
-Use `https.request`, exact application headers, no `Accept-Encoding`, and one total timer. Reject non-200 before attaching data consumers; call `response.resume()` only after installing a bounded discard handler that never stores the body. For 200, validate headers first, then accumulate at most 1,048,576 bytes. Destroy streams on cancel, timeout, stale callback, or overflow. Return only closed codes and allowed bounded metadata.
+Use `https.request` with `agent: false`, `setHost: false`, explicit SNI/hostname verification, the exact seven headers (including explicit `Host` and `Connection: close`), no proxy/global Agent or pool, and one total timer. Create the request without `write`/`end`; after `secureConnect`, prove `remoteFamily` is IPv4 and the canonical peer address equals the pinned address, then call `end(exactBody)` exactly once. Prove no secret, Authorization header, or prompt bytes leave before that check. Reject non-200 before attaching data consumers; call `response.resume()` only after installing a bounded discard handler that never stores the body. For 200, validate headers first, then accumulate at most 1,048,576 bytes. Destroy streams on cancel, timeout, stale callback, remote mismatch, or overflow. Return only closed codes and allowed bounded metadata.
 
 - [ ] **Step 6: Run focused tests, typecheck, and record the worktree checkpoint**
 
@@ -667,7 +669,8 @@ interface ProviderCapture {
   requestId: string;
   prompt: string;
   promptBytes: number;
-  providerGeneration: number;
+  providerSettingsGeneration: number;
+  providerSaveGeneration: number;
   credentialGeneration: number;
   config: M05ProviderConfig;
 }
@@ -681,7 +684,8 @@ private captureCurrent(capture: ProviderCapture): boolean {
     current.selectionGeneration === capture.selectionGeneration &&
     current.request?.requestId === capture.requestId &&
     current.prompt === capture.prompt &&
-    current.providerGeneration === capture.providerGeneration &&
+    current.providerSettingsGeneration === capture.providerSettingsGeneration &&
+    current.providerSaveGeneration === capture.providerSaveGeneration &&
     current.credentialGeneration === capture.credentialGeneration &&
     providerConfigEqual(current.config, capture.config);
 }
@@ -689,7 +693,7 @@ private captureCurrent(capture: ProviderCapture): boolean {
 
 - [ ] **Step 5: Implement explicit execution and cancellation**
 
-Read Keychain only after ownership/readiness capture. Build exact body, call transport with an operation `AbortController`, parse envelope, call frozen M04 validator, and publish candidates only after the final fence. Drop the local secret variable in `finally`. Implement the exact shared entry guard and total settlement algorithm. `cancel()` and timeout synchronously win only for the matching sending owner, abort once, preserve candidates, install their exact diagnostic/state, and release exactly once; every later event is stale/no-op.
+Read Keychain only after ownership/readiness capture and apply its authoritative observation transition before DNS. Build exact body, call transport with an operation `AbortController`, parse envelope, call frozen M04 validator, and publish candidates only after the final fence. Drop the local secret variable in `finally`. Capture/recheck both provider generations. Implement the exact shared entry guard and total settlement algorithm. `cancel()` and timeout synchronously win only for the matching sending owner, abort once, preserve candidates, install their exact diagnostic/state, and release exactly once; every later event is stale/no-op.
 
 - [ ] **Step 6: Run focused tests and record the worktree checkpoint**
 
@@ -717,7 +721,7 @@ git diff --check
 
 - [ ] **Step 1: Add failing settings UI tests**
 
-Assert all three exact §12 disclosure/limitation texts, password input with `type=password` and `autocomplete=off`, endpoint/model controls, timeout dropdown, output-cap number control, acceptance disabled for invalid endpoint, configured/missing/unknown/unavailable status only, set-key control clearing in both success/failure, explicit delete-key action, installation-account non-editability, and the exact settings focus order/focus-return rules.
+Assert all three exact §12 disclosure/limitation texts, password input with `type=password` and `autocomplete=off`, five draft controls plus explicit `Save provider settings`, endpoint-draft disclosure revocation, configured/missing/unknown/unavailable status only, set-key clearing in both success/failure, explicit Delete and Refresh actions, installation-account non-editability, every new closed diagnostic, and the exact settings focus order/focus-return rules.
 
 - [ ] **Step 2: Add failing candidate-view tests**
 
@@ -824,7 +828,7 @@ Build production and runtime-test entry points with identical options and machin
 
 - [ ] **Step 4: Add exact scenarios**
 
-Run every scenario on exact Obsidian 1.7.4 and execution-time official stable against identical final production hashes. Include success; all readiness diagnostics; per-identity Keychain isolation and every mutation/verification path; all cross-controller cells; cancel/timeout event orders; redirect; 401; 429; oversized declared/chunked body; unsafe DNS; TLS/network; invalid content encoding/type/UTF-8/envelope/M04 result; every selection/import/request/settings/key/input/view/plugin stale race; immediate/new-owner settlements; exact settings/candidate focus and live-region assertions; external 1.0→2.0→1.0 host zoom with rectangles/overflow/two-RAF/screenshot; manual fallback; zero mutation; zero persistence; and zero retry/background traffic.
+Run every scenario on exact Obsidian 1.7.4 and execution-time official stable against identical final production hashes. Include success; all readiness diagnostics; complete credential observation/mutex/input/read/mutation/indeterminate transitions; per-identity isolation; every draft/save/two-generation settings path; all cross-controller cells; cancel/timeout event orders; redirect; 401; 429; oversized declared/chunked body; unsafe DNS and connected-peer mismatch; TLS/network; proxy environment/global Agent/socket-reuse attempts; exact-header checks; invalid content encoding/type/UTF-8/envelope/M04 result; depth 31/32/33 and ignored-extra cases; every selection/import/request/settings/key/input/view/plugin stale race; immediate/new-owner settlements; exact settings/candidate focus and live-region assertions; external 1.0→2.0→1.0 host zoom with rectangles/overflow/two-RAF/screenshot; manual fallback; zero mutation; zero persistence; and zero retry/background traffic.
 
 - [ ] **Step 5: Append gates to root verification and run them**
 
