@@ -1,7 +1,7 @@
 # Chat2Vault Document Index
 
-Version: 0.10
-Status: M03 complete; M04 implementation and two-row runtime gates passed; exact independent `GO — M04 COMMIT READY` received; commit/publication decision pending
+Version: 0.11
+Status: M03 and M04 complete and merged; no deployment, release, or M05 implementation performed
 Working name: Chat2Vault
 
 | Document                                   | Purpose                                                                                        |
@@ -26,6 +26,7 @@ Working name: Chat2Vault
 | `M04_SPEC.md`                              | Independently approved, byte-frozen M04 manual-distillation implementation authority           |
 | `15_M04_IMPLEMENTATION_NOTES.md`           | M04 candidate implementation, automated evidence, AC ledger, and remaining runtime/review gate |
 | `16_M04_RUNTIME_GATE_REPORT.md`            | M04 two-row macOS runtime qualification, attributed evidence, and runtime decision             |
+| `17_M04_CLOSURE_REPORT.md`                 | Final independent verdict, publication chronology, post-merge verification, and M04 closure    |
 | `../prompts/CODEX_M01_EXECUTION_PROMPT.md` | Consolidated Codex implementation prompt for Milestone 01                                      |
 | `../AGENTS.md`                             | Persistent repository governance for Codex/agents                                              |
 
@@ -69,4 +70,4 @@ For Milestone 04, the authority order is:
 7. `docs/05_ROADMAP.md`
 8. `docs/06_OPEN_SOURCE_RELEASE_STRATEGY.md`
 
-The exact v0.6 specification received `GO — M04 IMPLEMENTATION AUTHORIZED`, and the Product Owner explicitly authorized implementation. `docs/M04_SPEC.md` must remain byte-identical. The two-row runtime evidence and v8 whole-candidate packet received exact `GO — M04 COMMIT READY` on 2026-08-28. Commit/publication remains unauthorized pending a separate Product Owner decision.
+The exact v0.6 specification received `GO — M04 IMPLEMENTATION AUTHORIZED`, and the Product Owner explicitly authorized implementation. `docs/M04_SPEC.md` must remain byte-identical. The two-row runtime evidence and v8 whole-candidate packet received exact `GO — M04 COMMIT READY` on 2026-08-28. The Product Owner then separately authorized publication; pull request #3 merged the candidate into `main` at `09ecdd0c250e44060e597fd2777d52ae03e5fac3`. Deployment, release, and M05 remain outside M04 closure.
