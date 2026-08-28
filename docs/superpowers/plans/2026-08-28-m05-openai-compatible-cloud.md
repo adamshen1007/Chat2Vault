@@ -10,14 +10,14 @@
 
 ## Global Constraints
 
-- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the remediated v0.3 candidate hash is `c147055242175d57df31f0f06b697920c2da5ed6b4bf3d35015563b3406f03fc` and must be replaced in this plan if review changes the specification.
+- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the remediated v0.4 candidate hash is `8a902f003a16a306244ae833c479205bbfd65c97419bedb84cd287ed8ed51126` and must be replaced in this plan if review changes the specification.
 - Baseline is M04 closure merge `2ac8f194adeca6de5cf2c227ca8213013455573e`.
 - Production eligibility is exactly macOS desktop x86_64.
 - Support one canonical DNS-hostname HTTPS `/v1/chat/completions` endpoint over pinned public IPv4, one model, and one credential derived from the persisted plugin-installation UUID.
 - Reuse the exact M04 request builder, prompt renderer, result validator, and inert preview.
 - No new production dependency or provider SDK.
 - No HTTP, redirect, proxy, local/private-network endpoint, streaming, retry, batching, background traffic, or model discovery.
-- No secret, prompt, response, candidate, usage-history, or provider-error-body persistence or logging.
+- No real/user/provider secret, prompt, response, candidate, endpoint/model, usage-history, or provider-error-body persistence or logging. Deterministic visibly synthetic test fixtures and the exact reserved runtime screenshot values are permitted only under §§6/20–21.
 - Provider code receives no vault mutation capability; M03 source save remains separate.
 - No Ollama adapter, M06 behavior, release, deployment, paid provider smoke, or unsupported-platform claim.
 - Use TDD. Do not begin a later task while focused tests for the current task fail.
@@ -43,8 +43,8 @@
 - `apps/obsidian-plugin/test/provider-transport.test.ts`: synthetic TLS, DNS, status, size, timeout, and cancellation cases.
 - `apps/obsidian-plugin/src/provider-controller.ts`: operation ownership, stale fences, previous-preview preservation, and usage state.
 - `apps/obsidian-plugin/test/provider-controller.test.ts`: every §13 race and invalidation boundary.
-- `apps/obsidian-plugin/src/settings-model.ts`: exact v2-to-v3 migration and serialized provider-setting saves.
-- `apps/obsidian-plugin/src/settings.ts`: disclosure, endpoint/model/cap/timeout, password, and key deletion UI.
+- `apps/obsidian-plugin/src/settings-model.ts`: exact v2-to-v3 identity persistence transaction and serialized provider-setting saves.
+- `apps/obsidian-plugin/src/settings.ts`: identity initialization/retry, disclosure, endpoint/model/cap/timeout, password, and key deletion UI.
 - `apps/obsidian-plugin/src/main.ts`: narrow Keychain/transport wiring and invalidators.
 - `apps/obsidian-plugin/src/view.ts`: provider preflight, execute/cancel, usage, and M04 fallback UI.
 - `apps/obsidian-plugin/styles.css`: scoped provider-panel responsive/accessibility styles.
@@ -311,7 +311,7 @@ pnpm --filter @chat2vault/core test
 git diff --check
 ```
 
-### Task 3: Exact settings v3 migration and save arbitration
+### Task 3: Exact settings v3 identity initialization and save arbitration
 
 **Files:**
 
@@ -323,7 +323,7 @@ git diff --check
 - Consumes: core configuration validators.
 - Produces: `Chat2VaultSettingsV3`, `DEFAULT_PROVIDER_SETTINGS`, `saveProviderSettings`, provider/credential generations, and provider invalidation hooks.
 
-- [ ] **Step 1: Add failing migration and rollback tests**
+- [ ] **Step 1: Add failing identity transaction, migration, and rollback tests**
 
 ```ts
 it("migrates exact v2 settings with an injected installation identity", () => {
@@ -352,7 +352,7 @@ it("migrates exact v2 settings with an injected installation identity", () => {
 });
 ```
 
-Add deferred-persistence tests proving draft-only edits have no authoritative effects, every accepted five-field Save reserves the FIFO queue and synchronously advances `providerSaveGeneration`, a second provider Save while pending returns `PROVIDER_SETTINGS_SAVING` without effects, provider entry is prohibited while pending, successful persistence atomically advances `providerSettingsGeneration`, failed persistence restores only prior provider authority without reverting successful non-provider saves or reviving stale work, exact-value saves follow the same path, and endpoint draft changes revoke disclosure.
+Add initialization tests proving exact v3 load performs no write; v2 migration and safe-default creation generate exactly one pending UUID; no Keychain/network/provider-settings entry occurs before persistence fulfillment; failure retains the same pending UUID and closed diagnostic; explicit retry reuses it; ambiguous-write reload reuses a stored v3 identity; clean restart after a truly unpersisted failure may generate a new never-used identity with zero Keychain access to either; and M01–M04 stay available. Add deferred provider-persistence tests proving draft-only edits have no authoritative effects, every accepted five-field Save reserves the FIFO queue and synchronously advances `providerSaveGeneration`, a second provider Save while pending returns `PROVIDER_SETTINGS_SAVING` without effects, provider entry is prohibited while pending, successful persistence atomically advances `providerSettingsGeneration`, failed persistence restores only prior provider authority without reverting successful non-provider saves or reviving stale work, exact-value saves follow the same path, and endpoint draft changes revoke disclosure.
 
 - [ ] **Step 2: Run and confirm focused failure**
 
@@ -380,7 +380,7 @@ export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
 };
 ```
 
-Reuse the existing safe-own-JSON traversal. Add an exact nested-key check, exact lowercase RFC 4122 v4/variant UUID validation, and injected `crypto.randomUUID()` generation only during migration/safe-default persistence. Never coerce or partially preserve malformed provider state; provider execution remains unavailable until a newly generated identity is persisted successfully.
+Reuse the existing safe-own-JSON traversal. Add an exact nested-key check, exact lowercase RFC 4122 v4/variant UUID validation, and injected `crypto.randomUUID()` generation only during migration/safe-default initialization. Implement `pendingIdentity` as one in-memory exact v3 candidate reserved on the FIFO settings queue before any M05 action. Fulfillment makes the UUID authoritative and triggers the first status observation. Failure keeps the same candidate/UUID and `PROVIDER_IDENTITY_SAVE_FAILED`; only explicit Retry resubmits it. Plugin unload discards an unpersisted identity without Keychain/network access. Never coerce or partially preserve malformed provider state; provider execution remains unavailable until identity persistence succeeds.
 
 - [ ] **Step 4: Implement the exact draft/save and two-generation algorithm**
 
@@ -648,7 +648,7 @@ expect(controller.snapshot.candidates).toEqual(previous);
 
 - [ ] **Step 2: Add the full §13 cross-controller and settlement matrix**
 
-Test every Provider × M04 Prepare/Copy/Validate/manual-input cell, rejected entry, accepted entry, preview winner, and ownership release. At Keychain read, DNS, pre-connect, headers, chunk, envelope parse, M04 validation, and final publish, mutate each captured generation independently and assert `stale`, transport abort when present, no late diagnostic replacement, and ownership release. Cover cancel-first/timeout-first/transport-first event orders, repeated cancel, immediate fresh entry, and old-token settlement after a newer owner.
+Test every Provider × M04 Prepare/Copy/Validate/manual-input cell, rejected entry, accepted entry, preview winner, and ownership release. At Keychain read, DNS, pre-connect, headers, chunk, envelope parse, M04 validation, and final publish, mutate each captured generation independently and assert `stale`, transport abort when present, no late request/preview/diagnostic/focus/UI replacement, and matching-token internal owner release exactly once. Include mismatches with no preceding external invalidation plus immediate fresh entry, and prove an old stale token never clears a newer owner. Cover cancel-first/timeout-first/transport-first event orders and repeated cancel.
 
 - [ ] **Step 3: Run and confirm focused failure**
 
@@ -693,7 +693,7 @@ private captureCurrent(capture: ProviderCapture): boolean {
 
 - [ ] **Step 5: Implement explicit execution and cancellation**
 
-Read Keychain only after ownership/readiness capture and apply its authoritative observation transition before DNS. Build exact body, call transport with an operation `AbortController`, parse envelope, call frozen M04 validator, and publish candidates only after the final fence. Drop the local secret variable in `finally`. Capture/recheck both provider generations. Implement the exact shared entry guard and total settlement algorithm. `cancel()` and timeout synchronously win only for the matching sending owner, abort once, preserve candidates, install their exact diagnostic/state, and release exactly once; every later event is stale/no-op.
+Read Keychain only after durably authoritative identity plus ownership/readiness capture and apply its authoritative observation transition before DNS. Build exact body, call transport with an operation `AbortController`, parse envelope, call frozen M04 validator, and publish candidates only after the final fence. Drop the local secret variable in `finally`. Capture/recheck both provider generations. Implement the exact shared entry guard and total settlement algorithm. A stale mismatch may clear only its own still-installed matching owner and is return-only for request/preview/diagnostic/focus/UI state. `cancel()` and timeout synchronously win only for the matching sending owner, abort once, preserve candidates, install their exact diagnostic/state, and release exactly once; every later event is stale/no-op.
 
 - [ ] **Step 6: Run focused tests and record the worktree checkpoint**
 
@@ -721,7 +721,7 @@ git diff --check
 
 - [ ] **Step 1: Add failing settings UI tests**
 
-Assert all three exact §12 disclosure/limitation texts, password input with `type=password` and `autocomplete=off`, five draft controls plus explicit `Save provider settings`, endpoint-draft disclosure revocation, configured/missing/unknown/unavailable status only, set-key clearing in both success/failure, explicit Delete and Refresh actions, installation-account non-editability, every new closed diagnostic, and the exact settings focus order/focus-return rules.
+Assert initialization-pending controls are absent/disabled, persistence failure exposes only `Retry provider initialization`, retry failure preserves focus/same UUID, retry success moves focus to endpoint, and M01–M04 remain available. Then assert all three exact §12 disclosure/limitation texts, password input with `type=password` and `autocomplete=off`, five draft controls plus explicit `Save provider settings`, endpoint-draft disclosure revocation, configured/missing/unknown/unavailable status only, set-key clearing in both success/failure, explicit Delete and Refresh actions, installation-account non-editability, every new closed diagnostic, and the exact settled settings focus order/focus-return rules.
 
 - [ ] **Step 2: Add failing candidate-view tests**
 
@@ -828,7 +828,7 @@ Build production and runtime-test entry points with identical options and machin
 
 - [ ] **Step 4: Add exact scenarios**
 
-Run every scenario on exact Obsidian 1.7.4 and execution-time official stable against identical final production hashes. Include success; all readiness diagnostics; complete credential observation/mutex/input/read/mutation/indeterminate transitions; per-identity isolation; every draft/save/two-generation settings path; all cross-controller cells; cancel/timeout event orders; redirect; 401; 429; oversized declared/chunked body; unsafe DNS and connected-peer mismatch; TLS/network; proxy environment/global Agent/socket-reuse attempts; exact-header checks; invalid content encoding/type/UTF-8/envelope/M04 result; depth 31/32/33 and ignored-extra cases; every selection/import/request/settings/key/input/view/plugin stale race; immediate/new-owner settlements; exact settings/candidate focus and live-region assertions; external 1.0→2.0→1.0 host zoom with rectangles/overflow/two-RAF/screenshot; manual fallback; zero mutation; zero persistence; and zero retry/background traffic.
+Run every scenario on exact Obsidian 1.7.4 and execution-time official stable against identical final production hashes. Include exact-v3 initialization, migration/safe-default success, persistence failure, same-UUID retry, ambiguous-write reload, clean restart, and zero pre-authority Keychain/network access; all readiness diagnostics; complete credential observation/mutex/input/read/mutation/indeterminate transitions; per-identity isolation; every draft/save/two-generation settings path; all cross-controller cells; stale mismatch with no prior invalidation and safe matching-owner release; cancel/timeout event orders; redirect; 401; 429; oversized declared/chunked body; unsafe DNS and connected-peer mismatch; TLS/network; proxy environment/global Agent/socket-reuse attempts; exact-header checks; invalid content encoding/type/UTF-8/envelope/M04 result; depth 31/32/33 and ignored-extra cases; every selection/import/request/settings/key/input/view/plugin stale race; immediate/new-owner settlements; exact initialization/settings/candidate focus and live-region assertions; external 1.0→2.0→1.0 host zoom with rectangles/overflow/two-RAF and an unredacted screenshot using only `m05.invalid`, `synthetic-m05-model`, and committed deterministic synthetic display fixtures; manual fallback; zero mutation; zero application persistence outside the narrow synthetic verification artifacts; and zero retry/background traffic.
 
 - [ ] **Step 5: Append gates to root verification and run them**
 
@@ -870,7 +870,7 @@ git diff --check
 
 - [ ] **Step 1: Record implementation notes and pre-review runtime report**
 
-Include exact root/branch/base/upstream/HEAD, files, architecture, native hashes, request golden hash, test counts, runtime scenario ledger, Keychain cleanup proof, secret/content scan, risks, limitations, and separate publication states. Decision remains `NO-GO — independent M05 review pending`.
+Include exact root/branch/base/upstream/HEAD, files, architecture, native hashes, request golden hash, test counts, runtime scenario ledger, Keychain cleanup proof, real-data/credential scan, exact permitted-synthetic-artifact inventory, risks, limitations, and separate publication states. Decision remains `NO-GO — independent M05 review pending`.
 
 - [ ] **Step 2: Run the complete fresh gate**
 
@@ -889,7 +889,7 @@ git diff --stat 2ac8f194adeca6de5cf2c227ca8213013455573e...HEAD
 git diff --name-status 2ac8f194adeca6de5cf2c227ca8213013455573e...HEAD
 ```
 
-Run a repository-wide credential-pattern scan with only inert fragmented fixtures; fail on any contiguous provider-shaped value.
+Run a repository-wide scan proving no real conversation export, endpoint/model, raw evidence body, or provider-shaped credential exists. Permit only the exact deterministic synthetic fixtures and reserved screenshot literals frozen by §§6/20–21; synthetic credential strings must remain visibly inert and non-provider-shaped.
 
 - [ ] **Step 4: Complete implementation evidence without committing**
 

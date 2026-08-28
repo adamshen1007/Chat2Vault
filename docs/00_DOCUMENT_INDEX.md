@@ -1,7 +1,7 @@
 # Chat2Vault Document Index
 
-Version: 0.14
-Status: M03 and M04 complete and merged; M05 v0.3 specification remediation awaiting exact independent re-review
+Version: 0.15
+Status: M03 and M04 complete and merged; M05 v0.4 specification remediation awaiting exact independent re-review
 Working name: Chat2Vault
 
 | Document                                   | Purpose                                                                                        |
