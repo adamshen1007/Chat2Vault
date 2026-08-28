@@ -10,10 +10,10 @@
 
 ## Global Constraints
 
-- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the current candidate hash is `da950f5d4d704dfe5a2fbd077a677e1a207c6226875d1c5b96a74484b5f0f611` and must be replaced in this plan if review changes the specification.
+- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the remediated v0.2 candidate hash is `fba695d9e68e5a0620397e644e2da963748f2e3f7674a18f9b663b66145c0c31` and must be replaced in this plan if review changes the specification.
 - Baseline is M04 closure merge `2ac8f194adeca6de5cf2c227ca8213013455573e`.
 - Production eligibility is exactly macOS desktop x86_64.
-- Support one canonical HTTPS `/v1/chat/completions` endpoint, one model, and one fixed Keychain account.
+- Support one canonical DNS-hostname HTTPS `/v1/chat/completions` endpoint over pinned public IPv4, one model, and one credential derived from the persisted plugin-installation UUID.
 - Reuse the exact M04 request builder, prompt renderer, result validator, and inert preview.
 - No new production dependency or provider SDK.
 - No HTTP, redirect, proxy, local/private-network endpoint, streaming, retry, batching, background traffic, or model discovery.
@@ -21,6 +21,7 @@
 - Provider code receives no vault mutation capability; M03 source save remains separate.
 - No Ollama adapter, M06 behavior, release, deployment, paid provider smoke, or unsupported-platform claim.
 - Use TDD. Do not begin a later task while focused tests for the current task fail.
+- Do not create implementation commits until exact `GO — M05 COMMIT READY` and separate Product Owner commit authorization; task checkpoints remain worktree diffs.
 
 ---
 
@@ -28,14 +29,14 @@
 
 - `packages/core/src/provider/contracts.ts`: M05 limits, settings-independent provider types, closed diagnostics, request/response projections.
 - `packages/core/src/provider/config.ts`: endpoint, model, key, timeout, and output-cap validation.
-- `packages/core/src/provider/address.ts`: exhaustive public IPv4/IPv6 parsing and classification.
+- `packages/core/src/provider/address.ts`: exact IPv4 parsing and frozen denied-CIDR classification; every IPv6 form fails.
 - `packages/core/src/provider/envelope.ts`: golden request serialization and duplicate-aware response projection.
 - `packages/core/test/provider-config.test.ts`: endpoint/model/key and inclusive limit tables.
 - `packages/core/test/provider-address.test.ts`: address-boundary and mapped-address tables.
 - `packages/core/test/provider-envelope.test.ts`: golden bytes, adversarial envelopes, and usage behavior.
 - `apps/obsidian-plugin/native/keychain.cc`: dedicated Security-framework N-API module.
 - `apps/obsidian-plugin/scripts/build-native.mjs`: compile both independent native modules with the required frameworks.
-- `apps/obsidian-plugin/src/keychain.ts`: exact native-shape validation and production fixed-account wrapper.
+- `apps/obsidian-plugin/src/keychain.ts`: exact ABI-1 native-shape validation, derived installation account, and pre-call generation invalidation.
 - `apps/obsidian-plugin/test/keychain.test.ts`: fake native-shape and production-account contract tests.
 - `apps/obsidian-plugin/test/native-keychain.test.ts`: synthetic native lifecycle with verified cleanup.
 - `apps/obsidian-plugin/src/provider-transport.ts`: one pinned-DNS HTTPS request surface.
@@ -50,6 +51,7 @@
 - `apps/obsidian-plugin/scripts/check-m05-boundaries.mjs`: one-network-surface, no-write, no-secret, no-test-bypass static gate.
 - `apps/obsidian-plugin/test/m05-boundaries.test.ts`: runtime capability tripwires.
 - `apps/obsidian-plugin/scripts/check-m05-runtime.mjs`: deterministic attributed simulator/Keychain runtime gate.
+- `apps/obsidian-plugin/src/runtime-test-entry.ts` plus two test adapters: strictly delimited runtime-only simulator/Keychain injection, excluded from production.
 - `package.json`: add M05 static/runtime checks to the repository gate.
 - `README.md`, `docs/00_DOCUMENT_INDEX.md`, `docs/18_M05_IMPLEMENTATION_NOTES.md`, `docs/19_M05_RUNTIME_GATE_REPORT.md`: scope, traceability, evidence, and truthful readiness.
 
@@ -152,19 +154,15 @@ export interface M05ProviderConfig {
   maxOutputTokens: number;
 }
 
-export type M05DiagnosticCode =
-  | "PROVIDER_SETTINGS_INVALID"
-  | "PROVIDER_DISCLOSURE_REQUIRED"
-  | "KEYCHAIN_MISSING"
-  | "KEYCHAIN_UNAVAILABLE"
-  | "PROVIDER_DNS_UNSAFE"
-  | "PROVIDER_TIMEOUT"
-  | "PROVIDER_CANCELLED"
-  | "PROVIDER_NETWORK_FAILED"
-  | "PROVIDER_RESPONSE_INVALID"
-  | "PROVIDER_RESULT_INVALID"
-  | "PROVIDER_STALE";
+export const M05_DIAGNOSTICS = {
+  // Transcribe every §17 row byte-exactly: code, severity, fixed message,
+  // triggering stage, precedence, provider state, and controller result.
+} as const satisfies Record<string, M05DiagnosticDefinition>;
+
+export type M05DiagnosticCode = keyof typeof M05_DIAGNOSTICS;
 ```
+
+No additional M05 diagnostic is permitted. Add a golden table test that enumerates every §17 code/message/severity and every trigger/state/result mapping.
 
 - [ ] **Step 4: Implement the validators without coercion**
 
@@ -202,11 +200,10 @@ Run: `pnpm --filter @chat2vault/core test`
 
 Expected: all core tests PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Record the worktree checkpoint**
 
 ```bash
-git add packages/core/src/provider packages/core/src/index.ts packages/core/test/provider-config.test.ts
-git commit -m "feat(core): validate M05 provider configuration"
+git diff --check
 ```
 
 ### Task 2: Public address classification and provider envelopes
@@ -234,7 +231,7 @@ it.each([
   ["10.0.0.1", false],
   ["169.254.1.1", false],
   ["192.0.2.1", false],
-  ["2001:4860:4860::8888", true],
+  ["2001:4860:4860::8888", false],
   ["::1", false],
   ["fc00::1", false],
   ["::ffff:8.8.8.8", false],
@@ -279,17 +276,11 @@ export function classifyPublicAddress(address: string): AddressResult {
     )
       ? { ok: false }
       : { ok: true, family: 4, address };
-  const ipv6 = parseExactIpv6(address);
-  if (ipv6 === undefined || isMappedIpv4(ipv6)) return { ok: false };
-  return IPV6_DENY_PREFIXES.some(([network, bits]) =>
-    inIpv6Prefix(ipv6, network, bits),
-  )
-    ? { ok: false }
-    : { ok: true, family: 6, address };
+  return { ok: false };
 }
 ```
 
-List every denied range from §10 explicitly and test both endpoints adjacent to each range.
+List the exact §10 IPv4 denied-CIDR table and test each first/last address plus both adjacent complement boundaries. Reject IP literals at endpoint validation and every IPv6, mapped, NAT64, 6to4, Teredo, zone-bearing, and non-canonical numeric input.
 
 - [ ] **Step 5: Implement stable request serialization and guarded response projection**
 
@@ -313,12 +304,11 @@ export function buildProviderRequest(
 
 Extract the duplicate-aware JSON scanner from M04 into an internal shared utility without changing M04 public behavior or golden bytes. `parseProviderResponse(bytes)` must use fatal UTF-8, reject every §16 security condition, require exactly one choice/content string, and omit malformed usage while retaining valid content.
 
-- [ ] **Step 6: Run focused tests plus all core regressions and commit**
+- [ ] **Step 6: Run focused tests plus all core regressions and record the worktree checkpoint**
 
 ```bash
 pnpm --filter @chat2vault/core test
-git add packages/core/src/provider packages/core/src/distillation packages/core/src/index.ts packages/core/test/provider-*.test.ts packages/core/test/distillation-result.test.ts
-git commit -m "feat(core): add bounded M05 provider envelopes"
+git diff --check
 ```
 
 ### Task 3: Exact settings v3 migration and save arbitration
@@ -336,15 +326,19 @@ git commit -m "feat(core): add bounded M05 provider envelopes"
 - [ ] **Step 1: Add failing migration and rollback tests**
 
 ```ts
-it("migrates exact v2 settings without provider authority", () => {
+it("migrates exact v2 settings with an injected installation identity", () => {
   expect(
-    readSettings({
-      schemaVersion: 2,
-      previewMessagesPerPage: 25,
-      sourceRoot: "Sources/AI",
-    }).settings,
+    readSettings(
+      {
+        schemaVersion: 2,
+        previewMessagesPerPage: 25,
+        sourceRoot: "Sources/AI",
+      },
+      () => "123e4567-e89b-42d3-a456-426614174000",
+    ).settings,
   ).toEqual({
     schemaVersion: 3,
+    installationId: "123e4567-e89b-42d3-a456-426614174000",
     previewMessagesPerPage: 25,
     sourceRoot: "Sources/AI",
     provider: {
@@ -353,7 +347,6 @@ it("migrates exact v2 settings without provider authority", () => {
       timeoutMs: 60_000,
       maxOutputTokens: 4_096,
       cloudDisclosureAccepted: false,
-      credentialAccount: "default",
     },
   });
 });
@@ -372,6 +365,7 @@ Expected: FAIL because schema v3 is unsupported.
 ```ts
 export interface Chat2VaultSettingsV3 {
   schemaVersion: 3;
+  installationId: string;
   previewMessagesPerPage: PreviewMessagesPerPage;
   sourceRoot: string;
   provider: ProviderSettings;
@@ -383,11 +377,10 @@ export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
   timeoutMs: 60_000,
   maxOutputTokens: 4_096,
   cloudDisclosureAccepted: false,
-  credentialAccount: "default",
 };
 ```
 
-Reuse the existing safe-own-JSON traversal. Add an exact nested-key check and never coerce or partially preserve malformed provider state.
+Reuse the existing safe-own-JSON traversal. Add an exact nested-key check, exact lowercase RFC 4122 v4/variant UUID validation, and injected `crypto.randomUUID()` generation only during migration/safe-default persistence. Never coerce or partially preserve malformed provider state; provider execution remains unavailable until a newly generated identity is persisted successfully.
 
 - [ ] **Step 4: Implement atomic provider save**
 
@@ -416,12 +409,11 @@ public async saveProviderSettings(value: ProviderSettings): Promise<SettingsSave
 }
 ```
 
-- [ ] **Step 5: Run all settings tests and commit**
+- [ ] **Step 5: Run all settings tests and record the worktree checkpoint**
 
 ```bash
 pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/settings-model.test.ts
-git add apps/obsidian-plugin/src/settings-model.ts apps/obsidian-plugin/test/settings-model.test.ts
-git commit -m "feat(plugin): migrate to M05 provider settings"
+git diff --check
 ```
 
 ### Task 4: Dedicated macOS Keychain module and wrapper
@@ -437,18 +429,29 @@ git commit -m "feat(plugin): migrate to M05 provider settings"
 **Interfaces:**
 
 - Consumes: validated visible-ASCII secret.
-- Produces: `configureKeychain`, `credentialStatus`, `readCredentialForOperation`, `setCredential`, `deleteCredential`, fixed service/account constants, and closed results.
+- Produces: `configureKeychain`, `credentialStatus`, `readCredentialForOperation`, `setCredential`, `deleteCredential`, fixed service/derived-account contracts, exact ABI-1 validation, credential generation invalidation, and closed results.
 
 - [ ] **Step 1: Write failing wrapper-shape tests**
 
 ```ts
 const fake = {
-  credentialStatus: vi.fn(() => ({ kind: "configured" })),
-  readCredential: vi.fn(() => ({ kind: "found", secret: "synthetic-key" })),
-  setCredential: vi.fn(() => ({ kind: "saved" })),
-  deleteCredential: vi.fn(() => ({ kind: "deleted" })),
+  abiVersion: 1,
+  credentialStatus: vi.fn(() => ({ tag: "configured" })),
+  readCredential: vi.fn(() => ({ tag: "configured", secret: "synthetic-key" })),
+  setCredential: vi.fn(() => ({
+    tag: "success",
+    state: "configured",
+    effect: "created",
+  })),
+  deleteCredential: vi.fn(() => ({
+    tag: "success",
+    state: "missing",
+    effect: "deleted",
+  })),
 };
-expect(configureKeychainForTest(fake)).toBe(true);
+expect(
+  configureKeychainForTest(fake, "123e4567-e89b-42d3-a456-426614174000"),
+).toBe(true);
 expect(credentialStatus()).toEqual({ status: "configured" });
 expect(readCredentialForOperation()).toEqual({
   ok: true,
@@ -456,7 +459,7 @@ expect(readCredentialForOperation()).toEqual({
 });
 expect(fake.readCredential).toHaveBeenCalledWith(
   "com.chat2vault.obsidian.openai-compatible",
-  "default",
+  "installation/123e4567-e89b-42d3-a456-426614174000",
 );
 ```
 
@@ -466,11 +469,11 @@ Run: `pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/keychain.te
 
 Expected: FAIL because the Keychain wrapper does not exist.
 
-- [ ] **Step 3: Implement the production fixed-account wrapper**
+- [ ] **Step 3: Implement the production derived-account wrapper and conservative mutation fence**
 
 ```ts
 export const KEYCHAIN_SERVICE = "com.chat2vault.obsidian.openai-compatible";
-export const KEYCHAIN_ACCOUNT = "default";
+export const KEYCHAIN_ACCOUNT_PREFIX = "installation/";
 
 export function readCredentialForOperation(): CredentialReadResult {
   if (nativeKeychain === undefined)
@@ -478,7 +481,7 @@ export function readCredentialForOperation(): CredentialReadResult {
   try {
     const value = nativeKeychain.readCredential(
       KEYCHAIN_SERVICE,
-      KEYCHAIN_ACCOUNT,
+      deriveKeychainAccount(settings.installationId),
     );
     return exactFound(value) && validateProviderSecret(value.secret).ok
       ? { ok: true, secret: value.secret }
@@ -491,13 +494,13 @@ export function readCredentialForOperation(): CredentialReadResult {
 }
 ```
 
-No production export accepts service/account parameters. Keep a test-only native binding in the test source graph and statically exclude it from the production bundle.
+No production export accepts service/account parameters. Before every valid mutation call, synchronously increment `credentialGeneration`, invalidate provider ownership, and set credential state `unknown`. Validate exact own data descriptors/keys/tags and Set/Delete effect cross-products. Cover every throw, extra/missing/accessor/symbol/prototype/wrong-ABI shape and both `mayHaveChanged` paths. Keep alternate-account binding only in the runtime-test source graph and statically exclude it from production.
 
 - [ ] **Step 4: Implement Security-framework operations**
 
 In `keychain.cc`, build exact `CFDictionaryRef` queries for `kSecClassGenericPassword`, UTF-8 service/account data, and `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Return only application tags. For set, use `SecItemUpdate` or `SecItemAdd`, then `SecItemCopyMatching` and constant-time byte comparison. For delete, call `SecItemDelete`, permit `errSecItemNotFound`, then verify `errSecItemNotFound` through a second read.
 
-Export exactly four N-API functions:
+Export exact numeric data property `abiVersion = 1` plus four N-API functions:
 
 ```cpp
 napi_property_descriptor descriptors[] = {
@@ -510,16 +513,15 @@ napi_property_descriptor descriptors[] = {
 
 - [ ] **Step 5: Extend native build and add lifecycle test**
 
-Compile `keychain.cc` separately with `-framework Security -framework CoreFoundation`. The native test uses `chat2vault-runtime-${process.pid}-${randomUUID()}` as its account, synthetic values only, and a `finally` deletion/absence assertion.
+Compile `keychain.cc` separately with `-framework Security -framework CoreFoundation`. The native test uses a unique synthetic runtime account, every success/failure/verification result, and a `finally` deletion/absence assertion. Native mutation failure before change reports `mayHaveChanged: false`; post-change verification failure reports `mayHaveChanged: true`; no rollback is attempted.
 
-- [ ] **Step 6: Run native/wrapper tests, verify both binaries, and commit**
+- [ ] **Step 6: Run native/wrapper tests, verify both binaries, and record the worktree checkpoint**
 
 ```bash
 pnpm --filter @chat2vault/obsidian-plugin build:native
 pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/keychain.test.ts test/native-keychain.test.ts
 file apps/obsidian-plugin/native/source_observer.node apps/obsidian-plugin/native/keychain.node
-git add apps/obsidian-plugin/native/keychain.cc apps/obsidian-plugin/native/keychain.node apps/obsidian-plugin/scripts/build-native.mjs apps/obsidian-plugin/src/keychain.ts apps/obsidian-plugin/test/keychain.test.ts apps/obsidian-plugin/test/native-keychain.test.ts
-git commit -m "feat(plugin): add verified macOS Keychain adapter"
+git diff --check
 ```
 
 ### Task 5: Pinned-DNS HTTPS transport
@@ -537,16 +539,14 @@ git commit -m "feat(plugin): add verified macOS Keychain adapter"
 - [ ] **Step 1: Write failing DNS pinning and header-golden tests**
 
 ```ts
-const resolveAll = vi.fn(async () => [
-  { address: "8.8.8.8", family: 4 as const },
-]);
+const resolve4 = vi.fn(async () => [{ address: "8.8.8.8", ttl: 300 }]);
 const request = vi.fn(fakeHttpsSuccess(validEnvelopeBytes));
 const result = await sendOpenAICompatibleRequest(input, {
-  resolveAll,
+  resolve4,
   request,
 });
 expect(result.ok).toBe(true);
-expect(resolveAll).toHaveBeenCalledOnce();
+expect(resolve4).toHaveBeenCalledOnce();
 expect(request).toHaveBeenCalledWith(
   expect.objectContaining({
     method: "POST",
@@ -562,7 +562,7 @@ expect(request).toHaveBeenCalledWith(
 
 - [ ] **Step 2: Add failing transport matrix**
 
-Cover empty DNS, 17 answers, mixed family, mixed public/private, unsafe literal, second-lookup attempt, TLS failure, 3xx, 401, 403, 429 with valid/invalid retry, 4xx, 5xx, content encoding, content type, oversized declared/chunked body, invalid UTF-8, explicit cancellation, each timeout phase, and late stream events.
+Cover empty DNS, 17 answers, duplicate/invalid-TTL/denied answers, resolver failure, IP-literal/IPv6 endpoint rejection, second-lookup attempt, TLS failure, 3xx, 401, 403, 429 with valid/invalid retry, 4xx, 5xx, content encoding, content type, oversized declared/chunked body, invalid UTF-8, explicit cancellation, each timeout phase, and late stream events.
 
 - [ ] **Step 3: Run focused transport tests and confirm failure**
 
@@ -575,35 +575,40 @@ Expected: FAIL because the transport does not exist.
 ```ts
 async function resolvePinned(
   hostname: string,
-  resolveAll: Resolver,
+  resolve4: Resolver,
 ): Promise<PinnedAddressResult> {
-  const answers = await resolveAll(hostname, { all: true, verbatim: true });
+  const answers = await resolve4(hostname, { ttl: true });
   if (answers.length < 1 || answers.length > 16) return unsafeDns();
-  const checked = answers.map(({ address, family }) => ({
+  const checked = answers.map(({ address, ttl }) => ({
     address,
-    family,
+    ttl,
     checked: classifyPublicAddress(address),
   }));
-  if (checked.some((item) => !item.checked.ok)) return unsafeDns();
-  if (new Set(checked.map((item) => item.family)).size !== 1)
+  if (
+    checked.some(
+      (item) =>
+        !item.checked.ok || !Number.isSafeInteger(item.ttl) || item.ttl <= 0,
+    )
+  )
     return unsafeDns();
-  return { ok: true, address: checked[0]!.address, family: checked[0]!.family };
+  if (new Set(checked.map((item) => item.address)).size !== checked.length)
+    return unsafeDns();
+  return { ok: true, address: checked[0]!.address, family: 4 as const };
 }
 ```
 
-Pass a lookup callback that returns only this captured address/family and increments a counter; fail if invoked more than once.
+Pass a lookup callback that returns only this captured address with family 4 and increments a counter; fail if invoked more than once. Preserve canonical DNS hostname for SNI and `checkServerIdentity`.
 
 - [ ] **Step 5: Implement bounded request/response lifecycle**
 
 Use `https.request`, exact application headers, no `Accept-Encoding`, and one total timer. Reject non-200 before attaching data consumers; call `response.resume()` only after installing a bounded discard handler that never stores the body. For 200, validate headers first, then accumulate at most 1,048,576 bytes. Destroy streams on cancel, timeout, stale callback, or overflow. Return only closed codes and allowed bounded metadata.
 
-- [ ] **Step 6: Run focused tests, typecheck, and commit**
+- [ ] **Step 6: Run focused tests, typecheck, and record the worktree checkpoint**
 
 ```bash
 pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/provider-transport.test.ts
 pnpm --filter @chat2vault/obsidian-plugin typecheck
-git add apps/obsidian-plugin/src/provider-transport.ts apps/obsidian-plugin/test/provider-transport.test.ts
-git commit -m "feat(plugin): add strict M05 HTTPS transport"
+git diff --check
 ```
 
 ### Task 6: Provider controller and stale-operation fencing
@@ -639,9 +644,9 @@ expect((await controller.distill()).status).toBe("failed");
 expect(controller.snapshot.candidates).toEqual(previous);
 ```
 
-- [ ] **Step 2: Add one deferred test per §13 fence**
+- [ ] **Step 2: Add the full §13 cross-controller and settlement matrix**
 
-At Keychain read, DNS, pre-connect, headers, chunk, envelope parse, M04 validation, and final publish, mutate each captured generation independently and assert `stale`, transport abort when present, no late diagnostic replacement, and ownership release.
+Test every Provider × M04 Prepare/Copy/Validate/manual-input cell, rejected entry, accepted entry, preview winner, and ownership release. At Keychain read, DNS, pre-connect, headers, chunk, envelope parse, M04 validation, and final publish, mutate each captured generation independently and assert `stale`, transport abort when present, no late diagnostic replacement, and ownership release. Cover cancel-first/timeout-first/transport-first event orders, repeated cancel, immediate fresh entry, and old-token settlement after a newer owner.
 
 - [ ] **Step 3: Run and confirm focused failure**
 
@@ -684,14 +689,13 @@ private captureCurrent(capture: ProviderCapture): boolean {
 
 - [ ] **Step 5: Implement explicit execution and cancellation**
 
-Read Keychain only after ownership/readiness capture. Build exact body, call transport with an operation `AbortController`, parse envelope, call frozen M04 validator, and publish candidates only after the final fence. Drop the local secret variable in `finally`. `cancel()` aborts once, increments token, preserves candidates, and returns the fixed cancelled diagnostic.
+Read Keychain only after ownership/readiness capture. Build exact body, call transport with an operation `AbortController`, parse envelope, call frozen M04 validator, and publish candidates only after the final fence. Drop the local secret variable in `finally`. Implement the exact shared entry guard and total settlement algorithm. `cancel()` and timeout synchronously win only for the matching sending owner, abort once, preserve candidates, install their exact diagnostic/state, and release exactly once; every later event is stale/no-op.
 
-- [ ] **Step 6: Run focused tests and commit**
+- [ ] **Step 6: Run focused tests and record the worktree checkpoint**
 
 ```bash
 pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/provider-controller.test.ts
-git add apps/obsidian-plugin/src/provider-controller.ts apps/obsidian-plugin/test/provider-controller.test.ts
-git commit -m "feat(plugin): arbitrate M05 provider operations"
+git diff --check
 ```
 
 ### Task 7: Settings and candidate-view integration
@@ -713,7 +717,7 @@ git commit -m "feat(plugin): arbitrate M05 provider operations"
 
 - [ ] **Step 1: Add failing settings UI tests**
 
-Assert exact disclosure copy, password input with `type=password` and `autocomplete=off`, endpoint/model controls, timeout dropdown, output-cap number control, acceptance disabled for invalid endpoint, configured/missing status only, set-key control clearing in both success/failure, and explicit delete-key action.
+Assert all three exact §12 disclosure/limitation texts, password input with `type=password` and `autocomplete=off`, endpoint/model controls, timeout dropdown, output-cap number control, acceptance disabled for invalid endpoint, configured/missing/unknown/unavailable status only, set-key control clearing in both success/failure, explicit delete-key action, installation-account non-editability, and the exact settings focus order/focus-return rules.
 
 - [ ] **Step 2: Add failing candidate-view tests**
 
@@ -735,7 +739,7 @@ for (const forbidden of [
   expect(container.textContent).not.toContain(forbidden);
 ```
 
-Add tests for disabled readiness, one click/one transport call, cancellation, view close/unload, usage disclaimer, live announcements, 200% zoom, keyboard focus, and manual M04 fallback.
+Add tests for every §13 UI arbitration cell, textarea invalidation, disabled readiness, one click/one transport call, cancel/timeout focus winners, view close/unload, usage disclaimer, every exact closed diagnostic/live announcement, the exact candidate focus order, 200% geometry/overflow predicates, and manual M04 fallback.
 
 - [ ] **Step 3: Run UI tests and confirm failure**
 
@@ -749,7 +753,7 @@ Configure both native modules from exact plugin paths. Inject only credential st
 
 - [ ] **Step 5: Render accessible settings and provider panel**
 
-Use Obsidian `Setting` controls and `textContent` only. Never render, read back, or persist the key after save. Preflight shows only validated host/model/bytes/cap/status. Keep the previous candidate DOM while sending/failing. Render usage as untrusted text with the required disclaimer. Preserve all manual controls.
+Use Obsidian `Setting` controls and `textContent` only. Never render, read back, or persist the key after save. Preflight shows only validated host/model/bytes/cap/status. Keep the previous candidate DOM while sending/failing. Render usage as untrusted text with the required disclaimer. Preserve all manual controls and apply the exact pending disable/edit rules, focus transfers, persistent polite/atomic live region, and fixed §17 text.
 
 - [ ] **Step 6: Add scoped styles and run UI/build tests**
 
@@ -760,11 +764,10 @@ pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/main.test.ts test
 pnpm --filter @chat2vault/obsidian-plugin build
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Record the worktree checkpoint**
 
 ```bash
-git add apps/obsidian-plugin/src/main.ts apps/obsidian-plugin/src/settings.ts apps/obsidian-plugin/src/view.ts apps/obsidian-plugin/styles.css apps/obsidian-plugin/test/main.test.ts apps/obsidian-plugin/test/view.test.ts apps/obsidian-plugin/test/styles.test.ts
-git commit -m "feat(plugin): add one-click cloud distillation UI"
+git diff --check
 ```
 
 ### Task 8: Static boundaries and deterministic runtime gate
@@ -774,13 +777,17 @@ git commit -m "feat(plugin): add one-click cloud distillation UI"
 - Create: `apps/obsidian-plugin/scripts/check-m05-boundaries.mjs`
 - Create: `apps/obsidian-plugin/scripts/check-m05-runtime.mjs`
 - Create: `apps/obsidian-plugin/test/m05-boundaries.test.ts`
+- Create: `apps/obsidian-plugin/src/runtime-test-entry.ts`
+- Create: `apps/obsidian-plugin/src/runtime-test-transport.ts`
+- Create: `apps/obsidian-plugin/src/runtime-test-keychain.ts`
+- Create: `apps/obsidian-plugin/scripts/compare-m05-runtime-artifact.mjs`
 - Modify: `apps/obsidian-plugin/scripts/check-plugin.mjs`
 - Modify: `package.json`
 
 **Interfaces:**
 
-- Consumes: production sources/bundle/metafile, synthetic native account seam, local TLS simulator seam, disposable vault mutation sentinel.
-- Produces: exact single-network-surface, no-bypass, no-write, no-secret/persistence, native-cleanup, and runtime-scenario evidence.
+- Consumes: production/test sources, bundles, esbuild metafiles, synthetic native account seam, local TLS simulator seam, disposable vault mutation sentinel, and the two exact Obsidian rows.
+- Produces: exact shared-input/delta proof, single-network-surface, no-bypass, no-write, no-secret/persistence, native-cleanup, accessibility/zoom, and both-row runtime-scenario evidence.
 
 - [ ] **Step 1: Write failing runtime capability tripwires**
 
@@ -809,15 +816,15 @@ const forbiddenEverywhere = [
 ];
 ```
 
-Assert only the transport imports `node:https`/`node:dns`; only Keychain wrapper loads `keychain.node`; production graph contains no runtime-test sentinel or alternate account; M05 modules cannot reach source writer/vault mutation; settings serialization contains no secret field; and the bundle has one `Authorization` construction site.
+Assert only the transport imports `node:https`/`node:dns`; only Keychain wrapper loads `keychain.node`; production graph contains no runtime-test entry/adapter, loopback bypass, sentinel, alternate-account selector, unsafe resolver path, conditional define, or alias; M05 modules cannot reach source writer/vault mutation; settings serialization contains no secret/account field; and the bundle has one `Authorization` construction site.
 
 - [ ] **Step 3: Implement attributed native/simulator runtime script**
 
-Use a disposable directory from `mkdtemp`, a local TLS simulator injected below production endpoint validation, and unique account `chat2vault-runtime-${process.pid}-${randomUUID()}`. Record only scenario IDs, operation tokens, process ID, candidate-vault hash, attempt/mutation counts, synthetic account hash, timings, and closed outcomes. In `finally`, delete and independently assert absence; exit nonzero on cleanup failure.
+Build production and runtime-test entry points with identical options and machine-readable metafiles. Compare every shared input hash and permit only the exact entry/two-adapter reachability delta. Use a disposable directory from `mkdtemp`, a local TLS simulator adapter, and unique synthetic account. Record only scenario IDs, operation tokens, process ID, candidate-vault hash, attempt/mutation counts, synthetic account hash, artifact hashes, timings, and closed outcomes. In `finally`, delete and independently assert absence; exit nonzero on cleanup failure. Never copy the test bundle into a production package.
 
 - [ ] **Step 4: Add exact scenarios**
 
-Include success; disclosure block; missing key; cancel; timeout; redirect; 401; 429; oversized declared/chunked body; invalid content encoding/type/UTF-8/envelope/M04 result; selection/settings/key/view/plugin stale races; manual fallback; zero mutation; zero persistence; and zero retry/background traffic.
+Run every scenario on exact Obsidian 1.7.4 and execution-time official stable against identical final production hashes. Include success; all readiness diagnostics; per-identity Keychain isolation and every mutation/verification path; all cross-controller cells; cancel/timeout event orders; redirect; 401; 429; oversized declared/chunked body; unsafe DNS; TLS/network; invalid content encoding/type/UTF-8/envelope/M04 result; every selection/import/request/settings/key/input/view/plugin stale race; immediate/new-owner settlements; exact settings/candidate focus and live-region assertions; external 1.0→2.0→1.0 host zoom with rectangles/overflow/two-RAF/screenshot; manual fallback; zero mutation; zero persistence; and zero retry/background traffic.
 
 - [ ] **Step 5: Append gates to root verification and run them**
 
@@ -837,11 +844,10 @@ node apps/obsidian-plugin/scripts/check-m05-runtime.mjs
 
 Expected: every gate PASS, synthetic Keychain item confirmed absent, exact expected attempt counts, and zero mutations/persistence.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Record the worktree checkpoint**
 
 ```bash
-git add package.json apps/obsidian-plugin/scripts apps/obsidian-plugin/test/m05-boundaries.test.ts
-git commit -m "test: enforce M05 provider boundaries"
+git diff --check
 ```
 
 ### Task 9: Whole-candidate verification, evidence, and independent review
@@ -881,11 +887,10 @@ git diff --name-status 2ac8f194adeca6de5cf2c227ca8213013455573e...HEAD
 
 Run a repository-wide credential-pattern scan with only inert fragmented fixtures; fail on any contiguous provider-shaped value.
 
-- [ ] **Step 4: Commit implementation evidence**
+- [ ] **Step 4: Complete implementation evidence without committing**
 
 ```bash
-git add README.md docs/00_DOCUMENT_INDEX.md docs/18_M05_IMPLEMENTATION_NOTES.md docs/19_M05_RUNTIME_GATE_REPORT.md
-git commit -m "docs: record M05 implementation evidence"
+git diff --check
 ```
 
 - [ ] **Step 5: Freeze the review packet**
@@ -902,4 +907,4 @@ GO — M05 COMMIT READY
 
 - [ ] **Step 7: Stop at the publication boundary**
 
-After the exact verdict, report implementation commit readiness separately from Product Owner publication authorization. Do not commit candidate remediation, push, open/merge a PR, tag, deploy, release, use a paid provider, submit to Community Plugins, or begin M06 without applicable explicit authorization.
+After the exact verdict, report implementation commit readiness separately from Product Owner commit/publication authorization. Do not commit, push, open/merge a PR, tag, deploy, release, use a paid provider, submit to Community Plugins, or begin M06 without applicable explicit authorization.
