@@ -1,7 +1,7 @@
 # Chat2Vault Document Index
 
-Version: 0.18
-Status: M03 and M04 complete and merged; M05 v0.7 specification remediation awaiting exact independent re-review
+Version: 0.19
+Status: M03 and M04 complete and merged; M05 v0.8 specification remediation awaiting exact independent re-review
 Working name: Chat2Vault
 
 | Document                                   | Purpose                                                                                        |
@@ -28,7 +28,7 @@ Working name: Chat2Vault
 | `16_M04_RUNTIME_GATE_REPORT.md`            | M04 two-row macOS runtime qualification, attributed evidence, and runtime decision             |
 | `17_M04_CLOSURE_REPORT.md`                 | Final independent verdict, publication chronology, post-merge verification, and M04 closure    |
 | `M05_SPEC.md`                              | Candidate M05 OpenAI-compatible cloud adapter specification and acceptance contract            |
-| `M05_SPEC_REVIEW_LEDGER.md`                | M05 v1–v6 independent specification findings and exact remediation lineage                     |
+| `M05_SPEC_REVIEW_LEDGER.md`                | M05 v1–v7 independent specification findings and exact remediation lineage                     |
 | `../prompts/CODEX_M01_EXECUTION_PROMPT.md` | Consolidated Codex implementation prompt for Milestone 01                                      |
 | `../AGENTS.md`                             | Persistent repository governance for Codex/agents                                              |
 

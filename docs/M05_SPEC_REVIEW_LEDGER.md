@@ -1,12 +1,12 @@
 # M05 Specification Review Ledger
 
-Version: 0.2-candidate
+Version: 0.3-candidate
 
-Status: M05 v0.7 remediation lineage; exact independent re-review pending
+Status: M05 v0.8 remediation lineage; exact independent re-review pending
 
 ## Purpose
 
-This ledger makes the complete M05 v1–v6 specification-review lineage independently reconstructible. It records each reviewed candidate, each material blocker returned by the independent reviewer, the remediation location in the current candidate, and the commit that introduced that remediation. It is evidence only: it does not approve the specification or authorize implementation, publication, provider use, release, or M06.
+This ledger makes the complete M05 v1–v7 specification-review lineage independently reconstructible. It records each reviewed candidate, each material blocker returned by the independent reviewer, the remediation location in the current candidate, and the commit that introduced that remediation. It is evidence only: it does not approve the specification or authorize implementation, publication, provider use, release, or M06.
 
 ## Candidate lineage
 
@@ -18,6 +18,7 @@ This ledger makes the complete M05 v1–v6 specification-review lineage independ
 | v4     | `fe5b223058c727d2200882a129bd85140e2ebf96` | `8a902f003a16a306244ae833c479205bbfd65c97419bedb84cd287ed8ed51126` | `NO-GO — M05 SPECIFICATION REMEDIATION REQUIRED` | `a04d3d7744c7f29111beb9a9a253ece6a205e943` |
 | v5     | `a04d3d7744c7f29111beb9a9a253ece6a205e943` | `3cced511ad24979764f48fa64045c2d4b003f0d404fcaf49f3df94be5b678baf` | `NO-GO — M05 SPECIFICATION REMEDIATION REQUIRED` | current v0.6 candidate commit after freeze |
 | v6     | `f665f9e5e05cbe634e490124aad7bbef949c19e6` | `6ebf37db354c68ba3c5b6dd90b01e7b4343db44e64cd0157c5fd7b00a85f9488` | `NO-GO — M05 SPECIFICATION REMEDIATION REQUIRED` | current v0.7 candidate after freeze        |
+| v7     | `e197ea5a3529b6a7722fc358bf6d028a95cf15a7` | `9a480a9d3149ca9305dcff0f85f65c3bada93ff9de481374e86a1a7b2e084541` | `NO-GO — M05 SPECIFICATION REMEDIATION REQUIRED` | current v0.8 candidate after freeze        |
 
 Every candidate descends from the M04 closure baseline `2ac8f194adeca6de5cf2c227ca8213013455573e`. The review packet must contain an independently verifiable Git bundle that exposes the candidate and baseline refs, plus canonical Git object/tree/blob evidence.
 
@@ -80,9 +81,15 @@ Every candidate descends from the M04 closure baseline `2ac8f194adeca6de5cf2c227
 | M05-V6-B03 | M03 settings writes could drop v3 fields, and pending-identity Retry could overwrite a later successful M03 edit.      | §9 now makes authoritative-v3 M03 edits persist complete v3 snapshots, makes failed-pending Retry rebase onto the latest authoritative M03 fields while retaining its UUID, preserves the explicit future-schema v2 path, and requires the complete interleaving/ambiguous-persistence/reload test matrix.                                                |
 | M05-V6-B04 | “System trust”/“no custom trust” did not describe Node/Electron HTTPS behavior exactly.                                | §§14/21 and AC-11 now freeze the host Node/Electron process's effective default CA policy: Chat2Vault passes no `ca`, adds/replaces no trust anchors, reads/sets no CA environment, and exposes no custom-trust feature; runtime `NODE_EXTRA_CA_CERTS` is explicitly inherited harness configuration rather than proof of automatic macOS-Keychain trust. |
 
+## v7 findings and v0.8 remediation
+
+| ID         | Material blocker                                                                                                       | v0.8 remediation                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M05-V7-B01 | Failed identity initialization could discard a valid independently recovered Provider subtree on Retry or an M03 edit. | §9 now retains the exact recovered Provider subtree as pending authority, uses defaults only when no valid Provider authority exists, rebases Retry onto both latest M03 authority and that retained Provider basis, and makes failed-pending M03 edits persist complete v3 transactions instead of destructive v2 downgrades. §§20–22 require the complete failure/edit/unload/reload/Retry matrix and byte-for-byte preservation of every valid recovered Provider field. |
+
 ## Re-review gate
 
-The next independent reviewer must verify this ledger against the supplied review evidence and Git bundle, then re-review the complete exact v0.7 specification. Only this exact leading verdict approves the specification:
+The next independent reviewer must verify this ledger against the supplied review evidence and Git bundle, then re-review the complete exact v0.8 specification. Only this exact leading verdict approves the specification:
 
 ```text
 GO — M05 SPECIFICATION APPROVED
