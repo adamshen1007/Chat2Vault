@@ -1,12 +1,12 @@
 # M05 Specification Review Ledger
 
-Version: 0.1-candidate
+Version: 0.2-candidate
 
-Status: M05 v0.6 remediation lineage; exact independent re-review pending
+Status: M05 v0.7 remediation lineage; exact independent re-review pending
 
 ## Purpose
 
-This ledger makes the complete M05 v1–v5 specification-review lineage independently reconstructible. It records each reviewed candidate, each material blocker returned by the independent reviewer, the remediation location in the current candidate, and the commit that introduced that remediation. It is evidence only: it does not approve the specification or authorize implementation, publication, provider use, release, or M06.
+This ledger makes the complete M05 v1–v6 specification-review lineage independently reconstructible. It records each reviewed candidate, each material blocker returned by the independent reviewer, the remediation location in the current candidate, and the commit that introduced that remediation. It is evidence only: it does not approve the specification or authorize implementation, publication, provider use, release, or M06.
 
 ## Candidate lineage
 
@@ -17,6 +17,7 @@ This ledger makes the complete M05 v1–v5 specification-review lineage independ
 | v3     | `471c45b6de8f3fc44a47642b5c8f3ef4bea91ed4` | `c147055242175d57df31f0f06b697920c2da5ed6b4bf3d35015563b3406f03fc` | `NO-GO — M05 SPECIFICATION REMEDIATION REQUIRED` | `fe5b223058c727d2200882a129bd85140e2ebf96` |
 | v4     | `fe5b223058c727d2200882a129bd85140e2ebf96` | `8a902f003a16a306244ae833c479205bbfd65c97419bedb84cd287ed8ed51126` | `NO-GO — M05 SPECIFICATION REMEDIATION REQUIRED` | `a04d3d7744c7f29111beb9a9a253ece6a205e943` |
 | v5     | `a04d3d7744c7f29111beb9a9a253ece6a205e943` | `3cced511ad24979764f48fa64045c2d4b003f0d404fcaf49f3df94be5b678baf` | `NO-GO — M05 SPECIFICATION REMEDIATION REQUIRED` | current v0.6 candidate commit after freeze |
+| v6     | `f665f9e5e05cbe634e490124aad7bbef949c19e6` | `6ebf37db354c68ba3c5b6dd90b01e7b4343db44e64cd0157c5fd7b00a85f9488` | `NO-GO — M05 SPECIFICATION REMEDIATION REQUIRED` | current v0.7 candidate after freeze        |
 
 Every candidate descends from the M04 closure baseline `2ac8f194adeca6de5cf2c227ca8213013455573e`. The review packet must contain an independently verifiable Git bundle that exposes the candidate and baseline refs, plus canonical Git object/tree/blob evidence.
 
@@ -70,9 +71,18 @@ Every candidate descends from the M04 closure baseline `2ac8f194adeca6de5cf2c227
 | M05-V5-B02 | `GO — M05 IMPLEMENTATION AUTHORIZED` conflated independent specification approval with Product Owner authority.  | §1 and the document index now reserve `GO — M05 SPECIFICATION APPROVED` for independent review and require a separate Product Owner `M05 IMPLEMENTATION AUTHORIZED` action before implementation.                                                                                                                                                                                                                      |
 | M05-V5-B03 | The packet omitted candidate Git objects, frozen M03 bytes, and complete prior-finding lineage.                  | This ledger supplies the v1–v5 lineage. The v0.6 packet must also contain `docs/M03_SPEC.md`, the exact v1–v5 review requests/verdict evidence, and a Git bundle plus canonical object/tree/blob evidence binding the candidate to the M04 baseline.                                                                                                                                                                   |
 
+## v6 findings and v0.7 remediation
+
+| ID         | Material blocker                                                                                                       | v0.7 remediation                                                                                                                                                                                                                                                                                                                                          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M05-V6-B01 | §6/AC-19 prohibited endpoint/model settings persistence while §§9/12 required it.                                      | §6 and AC-19 now define a closed persistence allowlist: the key may persist only in macOS Keychain; canonical endpoint/model and other exact v3 fields may persist only in local settings; production content and real endpoint/model values remain forbidden from logs, reports, retained evidence, fixtures, telemetry, and Git artifacts.              |
+| M05-V6-B02 | Keychain operations did not select one data-protection domain and Set verification contradicted secret-read authority. | §§7–8 now require `kSecUseDataProtectionKeychain = true` for every relevant query, prohibit synchronization, keep status/absence queries data-free, and authorize only the native-internal post-Set verification read outside Provider operations; AC-03 and runtime tests bind every operation to that domain.                                           |
+| M05-V6-B03 | M03 settings writes could drop v3 fields, and pending-identity Retry could overwrite a later successful M03 edit.      | §9 now makes authoritative-v3 M03 edits persist complete v3 snapshots, makes failed-pending Retry rebase onto the latest authoritative M03 fields while retaining its UUID, preserves the explicit future-schema v2 path, and requires the complete interleaving/ambiguous-persistence/reload test matrix.                                                |
+| M05-V6-B04 | “System trust”/“no custom trust” did not describe Node/Electron HTTPS behavior exactly.                                | §§14/21 and AC-11 now freeze the host Node/Electron process's effective default CA policy: Chat2Vault passes no `ca`, adds/replaces no trust anchors, reads/sets no CA environment, and exposes no custom-trust feature; runtime `NODE_EXTRA_CA_CERTS` is explicitly inherited harness configuration rather than proof of automatic macOS-Keychain trust. |
+
 ## Re-review gate
 
-The next independent reviewer must verify this ledger against the supplied review evidence and Git bundle, then re-review the complete exact v0.6 specification. Only this exact leading verdict approves the specification:
+The next independent reviewer must verify this ledger against the supplied review evidence and Git bundle, then re-review the complete exact v0.7 specification. Only this exact leading verdict approves the specification:
 
 ```text
 GO — M05 SPECIFICATION APPROVED
