@@ -1,16 +1,22 @@
 // @vitest-environment jsdom
-/* eslint-disable @typescript-eslint/require-await -- async UI adapter mock models Preview planner settlement. */
+/* eslint-disable @typescript-eslint/no-non-null-assertion, @typescript-eslint/require-await -- synthetic UI fixtures use proven indexed values and async adapter mocks. */
 import {
+  buildDistillationRequest,
   fingerprint,
+  validateDistillationResult,
   type CanonicalConversation,
   type CanonicalMessage,
+  type DistillationValidationResult,
   type ImportDiagnostic,
   type ImportResult,
 } from "@chat2vault/core";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ImportController } from "../src/controller.js";
-import { Chat2VaultView } from "../src/view.js";
+import {
+  Chat2VaultView,
+  type ManualDistillationViewServices,
+} from "../src/view.js";
 
 beforeAll(() => {
   HTMLElement.prototype.empty = function (): void {
@@ -89,6 +95,89 @@ const importResult = (
   diagnostics,
 });
 
+const flush = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 0));
+
+function manualConversation(): CanonicalConversation {
+  return {
+    schemaVersion: 1,
+    provider: "unknown",
+    providerConversationId: "manual-race",
+    title: "Manual race",
+    messages: [
+      {
+        providerMessageId: "message-one",
+        role: "user",
+        content: [{ type: "text", text: "Synthetic manual input" }],
+        metadata: {},
+        fingerprint: `sha256:${"1".repeat(64)}`,
+      },
+    ],
+    metadata: {},
+    contentFingerprint: `sha256:${"2".repeat(64)}`,
+  };
+}
+
+async function openManualView(
+  services: ManualDistillationViewServices,
+): Promise<{
+  view: Chat2VaultView;
+  controller: ImportController;
+  item: CanonicalConversation;
+  validPaste: string;
+}> {
+  const item = manualConversation();
+  const built = buildDistillationRequest(item);
+  if (!built.ok) throw new Error("Synthetic request failed");
+  const controller = new ImportController(() =>
+    Promise.resolve(importResult([item])),
+  );
+  const view = new Chat2VaultView(
+    {} as never,
+    controller,
+    () => 25,
+    undefined,
+    services,
+  );
+  document.body.append(view.contentEl);
+  await view.onOpen();
+  await controller.import([
+    {
+      name: "synthetic.json",
+      size: 1,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)),
+    },
+  ]);
+  view.contentEl.querySelector<HTMLButtonElement>(".c2v-row")?.click();
+  view.contentEl
+    .querySelector<HTMLButtonElement>('[aria-label="Prepare manual prompt"]')
+    ?.click();
+  await flush();
+  return {
+    view,
+    controller,
+    item,
+    validPaste: JSON.stringify({
+      schemaVersion: 1,
+      contractVersion: "m04-manual-v1",
+      requestId: built.request.requestId,
+      conversationFingerprint: built.request.conversationFingerprint,
+      candidates: [
+        {
+          type: "insight",
+          title: "Race winner",
+          summary: "The newer UI state wins.",
+          body: "A stale completion cannot redraw the view.",
+          confidence: "high",
+          sourceMessageFingerprints: [built.request.messages[0]!.fingerprint],
+          suggestedLinks: [],
+          suggestedTags: [],
+        },
+      ],
+    }),
+  };
+}
+
 async function openResult(
   result: ImportResult,
   pageSize: 10 | 25 | 50 = 25,
@@ -108,6 +197,277 @@ async function openResult(
 }
 
 describe("preview view", () => {
+  it("renders the accessible manual distillation round trip as inert read-only UI", async () => {
+    const item: CanonicalConversation = {
+      schemaVersion: 1,
+      provider: "unknown",
+      providerConversationId: "manual-ui",
+      title: "Manual UI",
+      messages: [
+        {
+          providerMessageId: "message-one",
+          role: "user",
+          content: [{ type: "text", text: "Synthetic manual input" }],
+          metadata: {},
+          fingerprint: `sha256:${"1".repeat(64)}`,
+        },
+      ],
+      metadata: {},
+      contentFingerprint: `sha256:${"2".repeat(64)}`,
+    };
+    const built = buildDistillationRequest(item);
+    if (!built.ok) throw new Error("Synthetic request failed");
+    const copied = vi.fn(async () => undefined);
+    const controller = new ImportController(() =>
+      Promise.resolve(importResult([item])),
+    );
+    const view = new Chat2VaultView(
+      {} as never,
+      controller,
+      () => 25,
+      undefined,
+      { writeClipboard: copied },
+    );
+    document.body.append(view.contentEl);
+    await view.onOpen();
+    await controller.import([
+      {
+        name: "synthetic.json",
+        size: 1,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)),
+      },
+    ]);
+    view.contentEl.querySelector<HTMLButtonElement>(".c2v-row")?.click();
+
+    const prepare = view.contentEl.querySelector<HTMLButtonElement>(
+      '[aria-label="Prepare manual prompt"]',
+    );
+    expect(prepare).not.toBeNull();
+    prepare?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const copy = view.contentEl.querySelector<HTMLButtonElement>(
+      '[aria-label="Copy prompt"]',
+    );
+    expect(copy?.disabled).toBe(false);
+    copy?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(copied).toHaveBeenCalledOnce();
+
+    const textarea = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Paste strict JSON"]',
+    );
+    expect(textarea?.spellcheck).toBe(false);
+    expect(textarea?.getAttribute("aria-describedby")).toBeTruthy();
+    if (textarea === null) throw new Error("Missing M04 textarea");
+    textarea.value = JSON.stringify({
+      schemaVersion: 1,
+      contractVersion: "m04-manual-v1",
+      requestId: built.request.requestId,
+      conversationFingerprint: built.request.conversationFingerprint,
+      candidates: Array.from(
+        { length: 11 },
+        (_, index) =>
+          ({
+            type: "insight",
+            title:
+              index === 0
+                ? "<script>inert title</script>"
+                : `Candidate ${String(index + 1)}`,
+            summary: "[[inert link]]",
+            body: "<img src=https://example.invalid/remote.png>",
+            confidence: "high",
+            sourceMessageFingerprints: [built.request.messages[0]!.fingerprint],
+            suggestedLinks: ["https://example.invalid/inert"],
+            suggestedTags: ["#inert"],
+          }) as const,
+      ),
+    });
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    const validate = view.contentEl.querySelector<HTMLButtonElement>(
+      '[aria-label="Validate result"]',
+    );
+    expect(validate?.disabled).toBe(false);
+    validate?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const panel = view.contentEl.querySelector(".c2v-distillation");
+    const keyboardOrder = [
+      "Prepare manual prompt",
+      "Copy prompt",
+      "Paste strict JSON",
+      "Validate result",
+      "Candidates per page",
+      "Previous",
+      "Next",
+    ];
+    expect(
+      [...panel!.querySelectorAll("button, textarea, select")].map(
+        (element) =>
+          element.getAttribute("aria-label") ?? element.textContent.trim(),
+      ),
+    ).toEqual(keyboardOrder);
+    expect(panel?.textContent).toContain("<script>inert title</script>");
+    expect(panel?.querySelector("script")).toBeNull();
+    expect(panel?.querySelector("img")).toBeNull();
+    expect(panel?.querySelector("a")).toBeNull();
+    expect(panel?.textContent).toContain(
+      "remains in the system clipboard until",
+    );
+    for (const forbidden of ["Accept", "Edit", "Reject", "Save candidate"])
+      expect(
+        [...view.contentEl.querySelectorAll("button")].some(
+          (button) => button.textContent === forbidden,
+        ),
+      ).toBe(false);
+    await view.onClose();
+  });
+
+  it("preserves textarea focus and DOM when an old Validate settles stale", async () => {
+    let resolveValidation!: (value: DistillationValidationResult) => void;
+    const { view, validPaste } = await openManualView({
+      writeClipboard: async () => undefined,
+      validateResult: () =>
+        new Promise<DistillationValidationResult>((resolve) => {
+          resolveValidation = resolve;
+        }),
+    });
+    const textarea = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Paste strict JSON"]',
+    )!;
+    textarea.value = validPaste;
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Validate result"]')
+      ?.click();
+    await flush();
+
+    const pendingTextarea = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Paste strict JSON"]',
+    )!;
+    pendingTextarea.value = "newer input";
+    pendingTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+    const winner = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Paste strict JSON"]',
+    )!;
+    expect(document.activeElement).toBe(winner);
+
+    resolveValidation({ ok: true, candidates: [] });
+    await flush();
+    expect(
+      view.contentEl.querySelector('[aria-label="Paste strict JSON"]'),
+    ).toBe(winner);
+    expect(document.activeElement).toBe(winner);
+    expect(winner.value).toBe("newer input");
+    await view.onClose();
+  });
+
+  it("keeps a newer validated winner mounted when an older Validate settles stale", async () => {
+    let resolveOld!: (value: DistillationValidationResult) => void;
+    let calls = 0;
+    const { view, validPaste } = await openManualView({
+      writeClipboard: async () => undefined,
+      validateResult: (raw, request) => {
+        calls += 1;
+        if (calls === 1)
+          return new Promise<DistillationValidationResult>((resolve) => {
+            resolveOld = resolve;
+          });
+        return validateDistillationResult(raw, request);
+      },
+    });
+    let textarea = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Paste strict JSON"]',
+    )!;
+    textarea.value = validPaste;
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Validate result"]')
+      ?.click();
+    await flush();
+
+    textarea = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Paste strict JSON"]',
+    )!;
+    textarea.value = validPaste;
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Validate result"]')
+      ?.click();
+    await flush();
+    const winner = view.contentEl.querySelector(".c2v-candidate-preview");
+    expect(winner?.textContent).toContain("Race winner");
+
+    resolveOld({ ok: false, diagnostics: [] });
+    await flush();
+    expect(view.contentEl.querySelector(".c2v-candidate-preview")).toBe(winner);
+    expect(view.contentEl.textContent).toContain("Race winner");
+    await view.onClose();
+  });
+
+  it("does not repopulate a closed view when an unsettled Copy finishes stale", async () => {
+    let resolveCopy!: () => void;
+    const { view } = await openManualView({
+      writeClipboard: () =>
+        new Promise<void>((resolve) => {
+          resolveCopy = resolve;
+        }),
+    });
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Copy prompt"]')
+      ?.click();
+    await flush();
+    await view.onClose();
+    expect(view.contentEl.childElementCount).toBe(0);
+
+    resolveCopy();
+    await flush();
+    expect(view.contentEl.childElementCount).toBe(0);
+  });
+
+  it("synchronously clears the manual workflow when the active conversation fingerprint changes", async () => {
+    let resolveCopy!: () => void;
+    const { view, item } = await openManualView({
+      writeClipboard: () =>
+        new Promise<void>((resolve) => {
+          resolveCopy = resolve;
+        }),
+    });
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Copy prompt"]')
+      ?.click();
+    await flush();
+
+    item.contentFingerprint = `sha256:${"3".repeat(64)}`;
+    const search = view.contentEl.querySelector<HTMLInputElement>(
+      'input[type="search"]',
+    )!;
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(
+      view.contentEl.querySelector<HTMLButtonElement>(
+        '[aria-label="Copy prompt"]',
+      )?.disabled,
+    ).toBe(true);
+    expect(view.contentEl.textContent).not.toContain("Complete messages");
+
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Prepare manual prompt"]')
+      ?.click();
+    await flush();
+    const winner = view.contentEl.querySelector<HTMLButtonElement>(
+      '[aria-label="Copy prompt"]',
+    );
+    expect(winner?.disabled).toBe(false);
+
+    resolveCopy();
+    await flush();
+    expect(
+      view.contentEl.querySelector<HTMLButtonElement>(
+        '[aria-label="Copy prompt"]',
+      ),
+    ).toBe(winner);
+    await view.onClose();
+  });
+
   it("caps mounted rows and excludes identifiers, fingerprints, and metadata", async () => {
     const conversations = Array.from({ length: 201 }, (_, index) =>
       conversation(index),

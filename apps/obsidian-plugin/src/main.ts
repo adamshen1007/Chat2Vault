@@ -63,6 +63,7 @@ export default class Chat2VaultPlugin extends Plugin {
   private readonly sourceInvalidators = new Set<
     (reason: "settings" | "unload") => void
   >();
+  private readonly distillationInvalidators = new Set<() => void>();
   private loaded = false;
   private controller?: ImportController;
   public override async onload(): Promise<void> {
@@ -107,6 +108,13 @@ export default class Chat2VaultPlugin extends Plugin {
               return () => this.sourceInvalidators.delete(invalidator);
             },
           },
+          {
+            writeClipboard: (text) => navigator.clipboard.writeText(text),
+            registerInvalidator: (invalidator) => {
+              this.distillationInvalidators.add(invalidator);
+              return () => this.distillationInvalidators.delete(invalidator);
+            },
+          },
         ),
     );
     this.addCommand({
@@ -122,6 +130,8 @@ export default class Chat2VaultPlugin extends Plugin {
     this.loaded = false;
     for (const invalidate of this.sourceInvalidators) invalidate("unload");
     this.sourceInvalidators.clear();
+    for (const invalidate of this.distillationInvalidators) invalidate();
+    this.distillationInvalidators.clear();
     this.controller?.close();
   }
   public async savePreviewMessagesPerPage(value: unknown) {

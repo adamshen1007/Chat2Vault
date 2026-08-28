@@ -29,5 +29,11 @@ describe("preview performance styles", () => {
     expect(styles).toMatch(
       /\.c2v-source pre\s*\{[^}]*box-sizing:\s*border-box;[^}]*width:\s*100%;[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto;/s,
     );
+    expect(styles).toMatch(
+      /\.c2v-distillation-paste\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*100%;[^}]*height:\s*16rem;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;[^}]*white-space:\s*pre-wrap;[^}]*overflow-wrap:\s*anywhere;/s,
+    );
+    expect(styles).toMatch(
+      /\.c2v-candidate pre\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*100%;[^}]*max-height:\s*16rem;[^}]*overflow:\s*auto;[^}]*white-space:\s*pre-wrap;/s,
+    );
   });
 });
