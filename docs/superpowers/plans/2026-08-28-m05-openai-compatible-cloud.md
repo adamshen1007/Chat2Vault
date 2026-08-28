@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the remediated v0.5 candidate hash is `3cced511ad24979764f48fa64045c2d4b003f0d404fcaf49f3df94be5b678baf` and must be replaced in this plan if review changes the specification.
+- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the remediated v0.6 candidate hash is `6ebf37db354c68ba3c5b6dd90b01e7b4343db44e64cd0157c5fd7b00a85f9488` and must be replaced in this plan if review changes the specification.
 - Baseline is M04 closure merge `2ac8f194adeca6de5cf2c227ca8213013455573e`.
 - Production eligibility is exactly macOS desktop x86_64.
 - Support one canonical DNS-hostname HTTPS `/v1/chat/completions` endpoint over pinned public IPv4, one model, and one credential derived from the persisted plugin-installation UUID.
@@ -352,7 +352,7 @@ it("migrates exact v2 settings with an injected installation identity", () => {
 });
 ```
 
-Add initialization tests proving valid-identity v3 load performs no write; every frozen M03 load category and diagnostic is preserved through migration; v3 recovery is field-by-field with the exact ordered diagnostic composition; malformed/unsupported schema, invalid root, invalid preview/identity, invalid/missing/extra-key Provider, extra/missing top-level keys, combined failures, and unsafe-object categories follow §9 exactly; and migration/safe-default creation generates exactly one pending UUID with zero Keychain/network access before persistence fulfillment. Prove failure retains the same pending UUID, explicit retry reuses it, ambiguous-write reload reuses a stored valid identity, clean restart may generate a new never-used identity, and M01–M04 remain available.
+Add initialization tests proving valid-identity v3 load performs no write; every frozen M03 load category and diagnostic is preserved through migration; v3 recovery is field-by-field with the exact ordered diagnostic composition; malformed schema, invalid root, invalid preview/identity, invalid/missing/extra-key Provider, extra/missing top-level keys, combined failures, and unsafe-object categories follow §9 exactly; and eligible migration/safe-default creation generates exactly one pending UUID with zero Keychain/network access before persistence fulfillment. Prove failure retains the same pending UUID, explicit retry reuses it, ambiguous-write reload reuses a stored valid identity, clean restart may generate a new never-used identity, and M01–M04 remain available. For safe integer schema `>= 4`, prove the distinct `unsupportedFutureSettings` state, exact `unavailable`/`unsupported-settings` Provider readiness, zero UUID/saveData/Keychain/provider work, byte-identical load/unload persistence, frozen-M03 explicit preview/source Save semantics, no same-instance M05 initialization, and ordinary v2 migration only after a later reload.
 
 Add the complete §9 settings-mutex matrix. Prove the existing binary mutex never queues; every rejected M01–M04 action returns its exact baseline in-progress result; every rejected Retry/Provider Save returns `PROVIDER_SETTINGS_OPERATION_IN_PROGRESS` with zero effects; validation follows acquisition; each accepted Provider Save synchronously advances `providerSaveGeneration`; Provider entry is prohibited while pending; success advances `providerSettingsGeneration`; failure retains the complete prior settings; exact-value saves follow the same path; and endpoint draft changes revoke disclosure.
 
