@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the remediated v0.4 candidate hash is `8a902f003a16a306244ae833c479205bbfd65c97419bedb84cd287ed8ed51126` and must be replaced in this plan if review changes the specification.
+- Implement only the independently approved exact bytes of `docs/M05_SPEC.md`; the remediated v0.5 candidate hash is `3cced511ad24979764f48fa64045c2d4b003f0d404fcaf49f3df94be5b678baf` and must be replaced in this plan if review changes the specification.
 - Baseline is M04 closure merge `2ac8f194adeca6de5cf2c227ca8213013455573e`.
 - Production eligibility is exactly macOS desktop x86_64.
 - Support one canonical DNS-hostname HTTPS `/v1/chat/completions` endpoint over pinned public IPv4, one model, and one credential derived from the persisted plugin-installation UUID.
@@ -43,7 +43,7 @@
 - `apps/obsidian-plugin/test/provider-transport.test.ts`: synthetic TLS, DNS, status, size, timeout, and cancellation cases.
 - `apps/obsidian-plugin/src/provider-controller.ts`: operation ownership, stale fences, previous-preview preservation, and usage state.
 - `apps/obsidian-plugin/test/provider-controller.test.ts`: every §13 race and invalidation boundary.
-- `apps/obsidian-plugin/src/settings-model.ts`: exact v2-to-v3 identity persistence transaction and serialized provider-setting saves.
+- `apps/obsidian-plugin/src/settings-model.ts`: field-level v3 recovery, exact v1/v2 migration, identity persistence, and the preserved binary non-queuing settings mutex.
 - `apps/obsidian-plugin/src/settings.ts`: identity initialization/retry, disclosure, endpoint/model/cap/timeout, password, and key deletion UI.
 - `apps/obsidian-plugin/src/main.ts`: narrow Keychain/transport wiring and invalidators.
 - `apps/obsidian-plugin/src/view.ts`: provider preflight, execute/cancel, usage, and M04 fallback UI.
@@ -51,7 +51,7 @@
 - `apps/obsidian-plugin/scripts/check-m05-boundaries.mjs`: one-network-surface, no-write, no-secret, no-test-bypass static gate.
 - `apps/obsidian-plugin/test/m05-boundaries.test.ts`: runtime capability tripwires.
 - `apps/obsidian-plugin/scripts/check-m05-runtime.mjs`: deterministic attributed simulator/Keychain runtime gate.
-- `apps/obsidian-plugin/src/runtime-test-entry.ts` plus two test adapters: strictly delimited runtime-only simulator/Keychain injection, excluded from production.
+- `apps/obsidian-plugin/src/runtime-test-entry.ts` plus runtime network/Keychain seams: strictly delimited runtime-only inputs that execute the unchanged production HTTPS transport and are excluded from production.
 - `package.json`: add M05 static/runtime checks to the repository gate.
 - `README.md`, `docs/00_DOCUMENT_INDEX.md`, `docs/18_M05_IMPLEMENTATION_NOTES.md`, `docs/19_M05_RUNTIME_GATE_REPORT.md`: scope, traceability, evidence, and truthful readiness.
 
@@ -352,7 +352,9 @@ it("migrates exact v2 settings with an injected installation identity", () => {
 });
 ```
 
-Add initialization tests proving exact v3 load performs no write; v2 migration and safe-default creation generate exactly one pending UUID; no Keychain/network/provider-settings entry occurs before persistence fulfillment; failure retains the same pending UUID and closed diagnostic; explicit retry reuses it; ambiguous-write reload reuses a stored v3 identity; clean restart after a truly unpersisted failure may generate a new never-used identity with zero Keychain access to either; and M01–M04 stay available. Add deferred provider-persistence tests proving draft-only edits have no authoritative effects, every accepted five-field Save reserves the FIFO queue and synchronously advances `providerSaveGeneration`, a second provider Save while pending returns `PROVIDER_SETTINGS_SAVING` without effects, provider entry is prohibited while pending, successful persistence atomically advances `providerSettingsGeneration`, failed persistence restores only prior provider authority without reverting successful non-provider saves or reviving stale work, exact-value saves follow the same path, and endpoint draft changes revoke disclosure.
+Add initialization tests proving valid-identity v3 load performs no write; every frozen M03 load category and diagnostic is preserved through migration; v3 recovery is field-by-field with the exact ordered diagnostic composition; malformed/unsupported schema, invalid root, invalid preview/identity, invalid/missing/extra-key Provider, extra/missing top-level keys, combined failures, and unsafe-object categories follow §9 exactly; and migration/safe-default creation generates exactly one pending UUID with zero Keychain/network access before persistence fulfillment. Prove failure retains the same pending UUID, explicit retry reuses it, ambiguous-write reload reuses a stored valid identity, clean restart may generate a new never-used identity, and M01–M04 remain available.
+
+Add the complete §9 settings-mutex matrix. Prove the existing binary mutex never queues; every rejected M01–M04 action returns its exact baseline in-progress result; every rejected Retry/Provider Save returns `PROVIDER_SETTINGS_OPERATION_IN_PROGRESS` with zero effects; validation follows acquisition; each accepted Provider Save synchronously advances `providerSaveGeneration`; Provider entry is prohibited while pending; success advances `providerSettingsGeneration`; failure retains the complete prior settings; exact-value saves follow the same path; and endpoint draft changes revoke disclosure.
 
 - [ ] **Step 2: Run and confirm focused failure**
 
@@ -380,30 +382,29 @@ export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
 };
 ```
 
-Reuse the existing safe-own-JSON traversal. Add an exact nested-key check, exact lowercase RFC 4122 v4/variant UUID validation, and injected `crypto.randomUUID()` generation only during migration/safe-default initialization. Implement `pendingIdentity` as one in-memory exact v3 candidate reserved on the FIFO settings queue before any M05 action. Fulfillment makes the UUID authoritative and triggers the first status observation. Failure keeps the same candidate/UUID and `PROVIDER_IDENTITY_SAVE_FAILED`; only explicit Retry resubmits it. Plugin unload discards an unpersisted identity without Keychain/network access. Never coerce or partially preserve malformed provider state; provider execution remains unavailable until identity persistence succeeds.
+Reuse the existing safe-own-JSON traversal and frozen M03 load diagnostics. Add descriptor-safe recognized-field projection, exact lowercase RFC 4122 v4/variant UUID validation, and injected `crypto.randomUUID()` generation only when no valid identity survives migration/recovery. Recover valid identity, preview, source root, and exact Provider subtree independently; default only invalid fields/subtrees and emit the exact ordered diagnostics. Implement `pendingIdentity` as one in-memory exact v3 candidate that owns the existing binary settings mutex before settings UI registration. Fulfillment makes the UUID authoritative and triggers the first status observation. Failure keeps the same candidate/UUID; only explicit Retry can reacquire the mutex and resubmit it. Plugin unload discards an unpersisted identity without Keychain/network access.
 
 - [ ] **Step 4: Implement the exact draft/save and two-generation algorithm**
 
 ```ts
 public async saveProviderSettings(draft: ProviderSettings): Promise<SettingsSaveResult> {
-  const validated = validateProviderDraft(draft);
-  if (!validated.ok) return this.settingsInvalidWithoutSideEffects();
-  const previousProvider = this.settings.provider;
-  const saveGeneration = ++this.providerSaveGeneration;
-  this.invalidateProviderOwnerAndAbort();
-  this.installProviderSettingsSaving();
-  return this.settingsSaveQueue.run(async () => {
+  if (!this.tryAcquire()) return this.providerSettingsBusyWithoutEffects();
+  try {
+    const validated = validateProviderDraft(draft);
+    if (!validated.ok) return this.settingsInvalidWithoutSideEffects();
+    const previous = this.settings;
+    const saveGeneration = ++this.providerSaveGeneration;
+    this.invalidateProviderOwnerAndAbort();
+    this.installProviderSettingsSaving();
     try {
-      const next = { ...this.settings, provider: validated.value };
-      await this.persist(next);
-      this.settings = next;
-      this.providerSettingsGeneration += 1;
-      return this.installPersistedProviderReadiness(saveGeneration);
+      await this.persist({ ...previous, provider: validated.value });
+      return this.installPersistedProviderSettings(validated.value, saveGeneration);
     } catch {
-      this.settings = { ...this.settings, provider: previousProvider };
-      return this.installProviderSettingsSaveFailed(saveGeneration);
+      return this.installProviderSettingsSaveFailed(previous, saveGeneration);
     }
-  });
+  } finally {
+    this.releaseSettingsMutex();
+  }
 }
 ```
 
@@ -782,7 +783,7 @@ git diff --check
 - Create: `apps/obsidian-plugin/scripts/check-m05-runtime.mjs`
 - Create: `apps/obsidian-plugin/test/m05-boundaries.test.ts`
 - Create: `apps/obsidian-plugin/src/runtime-test-entry.ts`
-- Create: `apps/obsidian-plugin/src/runtime-test-transport.ts`
+- Create: `apps/obsidian-plugin/src/runtime-test-network-seam.ts`
 - Create: `apps/obsidian-plugin/src/runtime-test-keychain.ts`
 - Create: `apps/obsidian-plugin/scripts/compare-m05-runtime-artifact.mjs`
 - Modify: `apps/obsidian-plugin/scripts/check-plugin.mjs`
@@ -790,8 +791,8 @@ git diff --check
 
 **Interfaces:**
 
-- Consumes: production/test sources, bundles, esbuild metafiles, synthetic native account seam, local TLS simulator seam, disposable vault mutation sentinel, and the two exact Obsidian rows.
-- Produces: exact shared-input/delta proof, single-network-surface, no-bypass, no-write, no-secret/persistence, native-cleanup, accessibility/zoom, and both-row runtime-scenario evidence.
+- Consumes: production/test sources, bundles, esbuild metafiles, synthetic native account seam, narrow resolver/policy/socket-destination seam, ephemeral synthetic CA/local HTTPS server, disposable vault mutation sentinel, and the two exact Obsidian rows.
+- Produces: byte/source-identical production-transport proof, exact shared-input/delta proof, single-network-surface, no-bypass, no-write, no-secret/persistence, native/CA cleanup, accessibility/zoom, and both-row runtime-scenario evidence.
 
 - [ ] **Step 1: Write failing runtime capability tripwires**
 
@@ -824,11 +825,11 @@ Assert only the transport imports `node:https`/`node:dns`; only Keychain wrapper
 
 - [ ] **Step 3: Implement attributed native/simulator runtime script**
 
-Build production and runtime-test entry points with identical options and machine-readable metafiles. Compare every shared input hash and permit only the exact entry/two-adapter reachability delta. Use a disposable directory from `mkdtemp`, a local TLS simulator adapter, and unique synthetic account. Record only scenario IDs, operation tokens, process ID, candidate-vault hash, attempt/mutation counts, synthetic account hash, artifact hashes, timings, and closed outcomes. In `finally`, delete and independently assert absence; exit nonzero on cleanup failure. Never copy the test bundle into a production package.
+Build production and runtime-test entry points with identical options and machine-readable metafiles. Prove the production provider-transport source bytes/output contribution are identical and compare every other shared input hash; permit only the exact entry/runtime-network/runtime-Keychain reachability delta. Create an ephemeral synthetic CA and `m05.invalid` certificate before launching each Obsidian row with `NODE_EXTRA_CA_CERTS`; the bundle may neither read/set it nor pass `ca`. Run a local HTTPS server, drive deterministic resolver/public-policy inputs, and use a socket-destination override only for the mismatch scenario while the unchanged production `https.request`, TLS, hostname, header/body, pin, timeout, and response paths execute. Record only scenario IDs, operation tokens, process ID, candidate-vault hash, attempt/mutation counts, synthetic account/certificate/artifact hashes, timings, and closed outcomes. In `finally`, delete and independently assert absence of Keychain, CA, private-key, server, and vault artifacts; exit nonzero on cleanup failure. Never copy the test bundle into a production package.
 
 - [ ] **Step 4: Add exact scenarios**
 
-Run every scenario on exact Obsidian 1.7.4 and execution-time official stable against identical final production hashes. Include exact-v3 initialization, migration/safe-default success, persistence failure, same-UUID retry, ambiguous-write reload, clean restart, and zero pre-authority Keychain/network access; all readiness diagnostics; complete credential observation/mutex/input/read/mutation/indeterminate transitions; per-identity isolation; every draft/save/two-generation settings path; all cross-controller cells; stale mismatch with no prior invalidation and safe matching-owner release; cancel/timeout event orders; redirect; 401; 429; oversized declared/chunked body; unsafe DNS and connected-peer mismatch; TLS/network; proxy environment/global Agent/socket-reuse attempts; exact-header checks; invalid content encoding/type/UTF-8/envelope/M04 result; depth 31/32/33 and ignored-extra cases; every selection/import/request/settings/key/input/view/plugin stale race; immediate/new-owner settlements; exact initialization/settings/candidate focus and live-region assertions; external 1.0→2.0→1.0 host zoom with rectangles/overflow/two-RAF and an unredacted screenshot using only `m05.invalid`, `synthetic-m05-model`, and committed deterministic synthetic display fixtures; manual fallback; zero mutation; zero application persistence outside the narrow synthetic verification artifacts; and zero retry/background traffic.
+Run every scenario on exact Obsidian 1.7.4 and execution-time official stable against identical final production hashes. Include every v3 field-recovery/diagnostic fixture; the complete non-queuing settings-mutex matrix; identity migration, failure, same-UUID retry, ambiguous-write reload, clean restart, and zero pre-authority Keychain/network access; all readiness diagnostics; complete credential transitions; per-identity isolation; every draft/save/two-generation path; all cross-controller cells; stale-owner cases; cancel/timeout event orders; redirect; 401; 429; oversized bodies; production-classifier unsafe DNS; actual connected-peer mismatch; production-path TLS/hostname/network/proxy/global-Agent/socket-reuse/header checks; invalid response/envelope/M04 results; depth 31/32/33; every stale race; focus/live-region/zoom evidence; manual fallback; zero mutation; exact Keychain/CA/private-key cleanup; zero application persistence outside the narrow synthetic verification artifacts; and zero retry/background traffic.
 
 - [ ] **Step 5: Append gates to root verification and run them**
 
