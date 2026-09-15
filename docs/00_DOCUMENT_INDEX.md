@@ -33,6 +33,7 @@ Working name: Chat2Vault
 | `18_M05_IMPLEMENTATION_NOTES.md`                                     | M05 implementation architecture, inventory, acceptance mapping, evidence, and readiness state  |
 | `19_M05_RUNTIME_GATE_REPORT.md`                                      | Exact Obsidian 1.7.4/current-stable two-row M05 macOS runtime qualification                    |
 | `superpowers/specs/2026-09-15-m06-knowledge-review-writer-design.md` | Product Owner-approved M06 architecture, UX, write-safety, and verification design             |
+| `superpowers/plans/2026-09-15-m06-knowledge-review-writer.md`        | Test-first task plan for implementing and qualifying the approved M06 design                   |
 | `../prompts/CODEX_M01_EXECUTION_PROMPT.md`                           | Consolidated Codex implementation prompt for Milestone 01                                      |
 | `../AGENTS.md`                                                       | Persistent repository governance for Codex/agents                                              |
 
@@ -103,4 +104,4 @@ For Milestone 06 design, the authority order is:
 7. `docs/05_ROADMAP.md`
 8. `docs/06_OPEN_SOURCE_RELEASE_STRATEGY.md`
 
-The approved design authorizes specification and implementation planning, not M06 implementation. A complete M06 implementation specification and separate Product Owner implementation authorization remain required before application-code changes.
+The approved design is the complete M06 implementation authority. Its approval authorizes implementation planning, not application-code changes; explicit Product Owner selection of an implementation execution path remains required before those changes begin.

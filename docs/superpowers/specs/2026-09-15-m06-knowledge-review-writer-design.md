@@ -136,7 +136,13 @@ The filename is:
 
 The sanitizer removes separators, control characters, dot-segments, platform-reserved characters, leading/trailing whitespace and dots, and unsafe or empty results. It applies a deterministic fallback title and truncates on Unicode code-point boundaries so the complete filename remains within the defined UTF-8 byte limit.
 
-The knowledge root is a separately persisted, validated vault-relative folder. It has no default and cannot equal or overlap a path in a way that violates the source/knowledge separation policy. An empty or invalid knowledge root disables dry-run and writing.
+The knowledge root is a separately persisted, validated vault-relative folder. It has no default. After NFC normalization and path-equivalence folding, the knowledge root and source root must not be equal, and neither may be an ancestor or descendant of the other. An empty, invalid, or overlapping knowledge root disables dry-run and writing.
+
+### 5.4 Settings migration
+
+M06 introduces settings schema version 4 by adding `knowledgeRoot` to the complete persisted v3 shape. Exact valid v3 settings migrate to v4 with `knowledgeRoot: ""`; valid v4 settings load without an implicit write. The existing settings mutex remains binary and non-queuing, and every settings save writes a complete current-schema snapshot while preserving unrelated authoritative fields.
+
+Safe integer settings schemas greater than or equal to 5 enter the existing load-only unsupported-future state and remain byte-identical until an explicit supported baseline-setting save follows the established downgrade contract. Invalid v4 `knowledgeRoot` data is disabled in memory with a closed warning and does not weaken the source-root or provider recovery rules.
 
 ## 6. Markdown contract
 
