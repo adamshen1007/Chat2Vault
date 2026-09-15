@@ -41,6 +41,13 @@ import {
   distillationPageCount,
   type DistillationPageSize,
 } from "./distillation-model.js";
+import type { CredentialStatusResult } from "./keychain.js";
+import {
+  ProviderController,
+  type ProviderControllerServices,
+  type ProviderCurrent,
+  type ProviderInvalidationReason,
+} from "./provider-controller.js";
 
 export const VIEW_TYPE = "chat-to-vault-preview";
 
@@ -63,6 +70,31 @@ export interface ManualDistillationViewServices extends Pick<
   "writeClipboard" | "buildRequest" | "renderPrompt" | "validateResult"
 > {
   registerInvalidator?(invalidator: () => void): () => void;
+}
+
+export interface ProviderViewServices extends Omit<
+  ProviderControllerServices,
+  "current"
+> {
+  current(): Partial<ProviderCurrent> &
+    Pick<
+      ProviderCurrent,
+      | "platformEligible"
+      | "unsupportedFutureSettings"
+      | "identityState"
+      | "credentialState"
+      | "credentialOperationInProgress"
+      | "providerSettingsSaving"
+      | "cloudDisclosureAccepted"
+      | "providerSettingsGeneration"
+      | "providerSaveGeneration"
+      | "credentialGeneration"
+    >;
+  observeCredentialOnViewOpen(): CredentialStatusResult;
+  registerInvalidator(
+    invalidator: (reason: ProviderInvalidationReason) => void,
+  ): () => void;
+  registerStateObserver?(observer: () => void): () => void;
 }
 
 export class Chat2VaultView extends ItemView {
@@ -89,14 +121,26 @@ export class Chat2VaultView extends ItemView {
   private distillationPage = 1;
   private distillationPageSize: DistillationPageSize = 10;
   private unregisterDistillationInvalidator?: () => void;
+  private providerController?: ProviderController;
+  private readonly providerServices: ProviderViewServices | undefined;
+  private viewGeneration = 0;
+  private unregisterProviderInvalidator?: () => void;
+  private unregisterProviderStateObserver?: () => void;
+  private readonly providerStatusRegion: HTMLParagraphElement;
   public constructor(
     leaf: WorkspaceLeaf,
     private readonly controller: ImportController,
     private readonly pageSize: () => 10 | 25 | 50,
     private readonly sourceServices?: SourceViewServices,
     distillationServices?: ManualDistillationViewServices,
+    providerServices?: ProviderViewServices,
   ) {
     super(leaf);
+    this.providerStatusRegion = this.contentEl.ownerDocument.createElement("p");
+    this.providerStatusRegion.className = "c2v-provider-status";
+    this.providerStatusRegion.setAttribute("role", "status");
+    this.providerStatusRegion.setAttribute("aria-live", "polite");
+    this.providerStatusRegion.setAttribute("aria-atomic", "true");
     if (sourceServices !== undefined) {
       this.sourceController = new SourceWriteController(
         () => ({
@@ -180,6 +224,27 @@ export class Chat2VaultView extends ItemView {
       if (unregister !== undefined)
         this.unregisterDistillationInvalidator = unregister;
     }
+    this.providerServices = providerServices;
+    if (providerServices !== undefined) {
+      this.providerController = new ProviderController({
+        ...providerServices,
+        current: () => this.providerCurrent(),
+      });
+      this.unregisterProviderInvalidator = providerServices.registerInvalidator(
+        (reason) => {
+          this.providerController?.invalidate(reason);
+          if (this.loaded) this.redrawProviderFocusWinner();
+        },
+      );
+      const unregisterStateObserver = providerServices.registerStateObserver?.(
+        () => {
+          this.providerController?.preflight();
+          if (this.loaded) this.redrawProviderFocusWinner();
+        },
+      );
+      if (unregisterStateObserver !== undefined)
+        this.unregisterProviderStateObserver = unregisterStateObserver;
+    }
   }
   public getViewType(): string {
     return VIEW_TYPE;
@@ -192,6 +257,10 @@ export class Chat2VaultView extends ItemView {
   }
   public override onOpen(): Promise<void> {
     this.loaded = true;
+    this.viewGeneration += 1;
+    if (this.providerServices?.current().identityState === "authoritative")
+      this.providerServices.observeCredentialOnViewOpen();
+    this.providerController?.preflight();
     this.unsubscribe = this.controller.subscribe((snapshot) =>
       this.draw(snapshot),
     );
@@ -199,10 +268,14 @@ export class Chat2VaultView extends ItemView {
   }
   public override onClose(): Promise<void> {
     this.loaded = false;
+    this.viewGeneration += 1;
+    this.providerController?.invalidate("view-close");
     this.invalidateSourceState();
     this.invalidateDistillation(true, true);
     this.unregisterSourceInvalidator?.();
     this.unregisterDistillationInvalidator?.();
+    this.unregisterProviderInvalidator?.();
+    this.unregisterProviderStateObserver?.();
     this.unsubscribe?.();
     this.controller.close();
     this.contentEl.ondragover = null;
@@ -212,6 +285,50 @@ export class Chat2VaultView extends ItemView {
   }
   public focusImport(): void {
     this.chooseButton?.focus();
+  }
+  private providerCurrent(): ProviderCurrent {
+    const shared = this.providerServices?.current();
+    const manual = this.distillationController?.snapshot;
+    return {
+      platformEligible: shared?.platformEligible ?? false,
+      unsupportedFutureSettings: shared?.unsupportedFutureSettings ?? false,
+      identityState: shared?.identityState ?? "failed",
+      credentialState: shared?.credentialState ?? "unavailable",
+      credentialOperationInProgress:
+        shared?.credentialOperationInProgress ?? false,
+      providerSettingsSaving: shared?.providerSettingsSaving ?? false,
+      ...(shared?.providerSettingsStatusCode === undefined
+        ? {}
+        : { providerSettingsStatusCode: shared.providerSettingsStatusCode }),
+      cloudDisclosureAccepted: shared?.cloudDisclosureAccepted ?? false,
+      pluginGeneration: shared?.pluginGeneration ?? 0,
+      viewGeneration: this.viewGeneration,
+      importGeneration: this.importGeneration,
+      selectionGeneration: this.selectionGeneration,
+      providerSettingsGeneration: shared?.providerSettingsGeneration ?? 0,
+      providerSaveGeneration: shared?.providerSaveGeneration ?? 0,
+      credentialGeneration: shared?.credentialGeneration ?? 0,
+      ...(this.selected === undefined
+        ? {}
+        : { conversationFingerprint: this.selected.contentFingerprint }),
+      ...(manual?.request === undefined ? {} : { request: manual.request }),
+      ...(manual?.prompt === undefined ? {} : { prompt: manual.prompt }),
+      ...(manual?.promptBytes === undefined
+        ? {}
+        : { promptBytes: manual.promptBytes }),
+      ...(shared?.config === undefined ? {} : { config: shared.config }),
+      ...(manual?.owner === undefined ? {} : { manualOwner: manual.owner }),
+    };
+  }
+  private redrawProviderFocusWinner(): void {
+    const cancelHadFocus =
+      document.activeElement?.classList.contains("c2v-provider-cancel") ===
+      true;
+    this.draw(this.controller.snapshot);
+    if (cancelHadFocus)
+      this.contentEl
+        .querySelector<HTMLButtonElement>(".c2v-provider-distill")
+        ?.focus();
   }
   private button(
     parent: HTMLElement,
@@ -228,6 +345,8 @@ export class Chat2VaultView extends ItemView {
     const stateChanged = snapshot.state !== this.lastState;
     this.lastState = snapshot.state;
     if (snapshot.state === "reading") {
+      if (stateChanged)
+        this.providerController?.invalidate("import-replacement");
       this.invalidateSourceState();
       if (stateChanged) this.invalidateDistillation(false, true);
       this.selected = undefined;
@@ -266,6 +385,7 @@ export class Chat2VaultView extends ItemView {
     choose.disabled =
       snapshot.state === "reading" || snapshot.state === "parsing";
     this.button(actions, "Clear", () => {
+      this.providerController?.invalidate("import-clear");
       this.invalidateSourceState();
       this.invalidateDistillation(true, true);
       this.selected = undefined;
@@ -362,6 +482,7 @@ export class Chat2VaultView extends ItemView {
         this.selected !== undefined &&
         !filterConversations([this.selected], this.query).length;
       if (selectionCleared) {
+        this.providerController?.invalidate("selection-change");
         this.selected = undefined;
         this.invalidateDistillation(true, false);
       }
@@ -400,6 +521,7 @@ export class Chat2VaultView extends ItemView {
         row.createEl("span", { text: ` · ${severity}` });
       row.addEventListener("click", () => {
         if (this.selected !== conversation) {
+          this.providerController?.invalidate("selection-change");
           this.invalidateSourceState();
           this.invalidateDistillation(true, false);
         }
@@ -461,6 +583,8 @@ export class Chat2VaultView extends ItemView {
       this.messagePage = next;
     });
     this.drawManualDistillation(parent);
+    this.drawProvider(parent);
+    this.drawWinningCandidates(parent);
     this.drawSourceActions(parent);
   }
 
@@ -489,16 +613,19 @@ export class Chat2VaultView extends ItemView {
     });
     const prepareActions = panel.createDiv({ cls: "c2v-actions" });
     const prepare = this.button(prepareActions, "Prepare prompt", () => {
-      void this.runManualOperation(() => controller.prepare());
+      void this.runManualOperation("Prepare", () => controller.prepare());
     });
     prepare.setAttr("aria-label", "Prepare manual prompt");
-    prepare.disabled = snapshot.owner !== undefined;
+    prepare.disabled =
+      snapshot.owner !== undefined ||
+      this.providerController?.snapshot.status === "sending";
     const copy = this.button(prepareActions, "Copy prompt", () => {
-      void this.runManualOperation(() => controller.copy());
+      void this.runManualOperation("Copy", () => controller.copy());
     });
     copy.setAttr("aria-label", "Copy prompt");
     copy.disabled =
       snapshot.owner !== undefined ||
+      this.providerController?.snapshot.status === "sending" ||
       snapshot.request === undefined ||
       snapshot.prompt === undefined;
     if (snapshot.request !== undefined) {
@@ -526,7 +653,12 @@ export class Chat2VaultView extends ItemView {
     textarea.setAttr("aria-describedby", pasteDescriptionId);
     textarea.setAttr("placeholder", "Paste strict JSON result");
     textarea.addEventListener("input", () => {
-      controller.setPaste(textarea.value);
+      if (this.providerController === undefined)
+        controller.setPaste(textarea.value);
+      else
+        this.providerController.manualInput(() =>
+          controller.setPaste(textarea.value),
+        );
       this.distillationPage = 1;
       this.draw(this.controller.snapshot);
       this.contentEl
@@ -544,11 +676,12 @@ export class Chat2VaultView extends ItemView {
     pasteStatus.setAttr("aria-live", "polite");
     const validateActions = panel.createDiv({ cls: "c2v-actions" });
     const validate = this.button(validateActions, "Validate result", () => {
-      void this.runManualOperation(() => controller.validate());
+      void this.runManualOperation("Validate", () => controller.validate());
     });
     validate.setAttr("aria-label", "Validate result");
     validate.disabled =
       snapshot.owner !== undefined ||
+      this.providerController?.snapshot.status === "sending" ||
       snapshot.request === undefined ||
       snapshot.paste === "" ||
       snapshot.pasteOverLimit;
@@ -563,11 +696,15 @@ export class Chat2VaultView extends ItemView {
           text: `${diagnostic.code}${diagnostic.path === "" ? "" : ` at ${diagnostic.path}`}: ${diagnostic.message}`,
         });
     }
-    this.drawDistillationCandidates(panel);
   }
 
-  private drawDistillationCandidates(parent: HTMLElement): void {
-    const candidates = this.distillationController?.snapshot.candidates ?? [];
+  private drawWinningCandidates(parent: HTMLElement): void {
+    const providerCandidates =
+      this.providerController?.snapshot.candidates ?? [];
+    const candidates =
+      providerCandidates.length > 0
+        ? providerCandidates
+        : (this.distillationController?.snapshot.candidates ?? []);
     if (candidates.length === 0) return;
     const pages = distillationPageCount(
       candidates.length,
@@ -623,7 +760,96 @@ export class Chat2VaultView extends ItemView {
     });
   }
 
+  private drawProvider(parent: HTMLElement): void {
+    const controller = this.providerController;
+    if (controller === undefined) return;
+    if (
+      controller.snapshot.status === "unavailable" ||
+      controller.snapshot.status === "unconfigured" ||
+      controller.snapshot.status === "ready"
+    )
+      controller.preflight();
+    const snapshot = controller.snapshot;
+    const panel = parent.createEl("section", { cls: "c2v-provider-panel" });
+    panel.createEl("h4", { text: "Cloud provider" });
+    const identityState = this.providerServices?.current().identityState;
+    if (identityState !== "authoritative") {
+      this.updateProviderStatus(snapshot.diagnostic?.message ?? "");
+      panel.append(this.providerStatusRegion);
+      return;
+    }
+    const details = panel.createEl("dl", { cls: "c2v-provider-preflight" });
+    for (const [term, value] of [
+      ["Destination", snapshot.host ?? "not configured"],
+      ["Model", snapshot.model ?? "not configured"],
+      [
+        "Prompt bytes",
+        snapshot.promptBytes === undefined
+          ? "not prepared"
+          : String(snapshot.promptBytes),
+      ],
+      [
+        "Maximum output tokens",
+        snapshot.maxOutputTokens === undefined
+          ? "not configured"
+          : String(snapshot.maxOutputTokens),
+      ],
+      ["Credential", snapshot.credentialState],
+      ["Disclosure", snapshot.disclosureAccepted ? "accepted" : "not accepted"],
+    ] as const) {
+      details.createEl("dt", { text: term });
+      details.createEl("dd", { text: value });
+    }
+    this.updateProviderStatus(snapshot.diagnostic?.message ?? "");
+    panel.append(this.providerStatusRegion);
+    const actions = panel.createDiv({ cls: "c2v-provider-actions" });
+    const distill = this.button(actions, "Distill with provider", () => {
+      void this.runProvider();
+    });
+    distill.addClass("c2v-provider-distill");
+    distill.disabled =
+      snapshot.status === "sending" ||
+      snapshot.status === "unavailable" ||
+      snapshot.status === "unconfigured";
+    if (snapshot.status === "sending") {
+      const cancel = this.button(actions, "Cancel provider request", () => {
+        controller.cancel();
+        this.draw(this.controller.snapshot);
+        this.contentEl
+          .querySelector<HTMLButtonElement>(".c2v-provider-distill")
+          ?.focus();
+      });
+      cancel.addClass("c2v-provider-cancel");
+    }
+    if (snapshot.usage !== undefined) {
+      const usage = snapshot.usage;
+      panel.createEl("p", {
+        cls: "c2v-provider-usage",
+        text: `Provider-reported usage (untrusted and informational only): prompt ${String(usage.promptTokens ?? "unavailable")}, completion ${String(usage.completionTokens ?? "unavailable")}, total ${String(usage.totalTokens ?? "unavailable")}. Chat2Vault does not verify prices or calculate cost.`,
+      });
+    }
+  }
+
+  private updateProviderStatus(message: string): void {
+    if (this.providerStatusRegion.textContent !== message)
+      this.providerStatusRegion.textContent = message;
+  }
+
+  private async runProvider(): Promise<void> {
+    const controller = this.providerController;
+    if (controller === undefined) return;
+    const pending = controller.distill();
+    this.draw(this.controller.snapshot);
+    this.contentEl
+      .querySelector<HTMLButtonElement>(".c2v-provider-cancel")
+      ?.focus();
+    const result = await pending;
+    if (!this.loaded || result.status === "stale") return;
+    this.redrawProviderFocusWinner();
+  }
+
   private async runManualOperation(
+    kind: "Prepare" | "Copy" | "Validate",
     operation: () => Promise<ManualOperationResult>,
   ): Promise<void> {
     if (
@@ -633,6 +859,9 @@ export class Chat2VaultView extends ItemView {
       if (this.loaded) this.draw(this.controller.snapshot);
       return;
     }
+    const guarded = this.providerController?.guardManualOperation(kind);
+    if (guarded !== undefined && !guarded.ok) return;
+    if (kind !== "Copy") this.providerController?.manualOperationAccepted(kind);
     const pending = operation();
     this.draw(this.controller.snapshot);
     const operationResult = await pending;
@@ -862,15 +1091,19 @@ export class Chat2VaultView extends ItemView {
   ): void {
     if (pages <= 1) return;
     const nav = parent.createDiv({ cls: "c2v-pager" });
-    this.button(nav, "Previous", () => {
+    const previous = this.button(nav, "Previous", () => {
       update(Math.max(1, page - 1));
       this.draw(this.controller.snapshot);
     });
+    previous.setAttr("aria-label", "Previous page");
+    previous.disabled = page <= 1;
     nav.createEl("span", { text: `${String(page)} / ${String(pages)}` });
-    this.button(nav, "Next", () => {
+    const next = this.button(nav, "Next", () => {
       update(Math.min(pages, page + 1));
       this.draw(this.controller.snapshot);
     });
+    next.setAttr("aria-label", "Next page");
+    next.disabled = page >= pages;
   }
   private focusState(state: PreviewState): void {
     if (state === "error") {

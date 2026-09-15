@@ -35,5 +35,11 @@ describe("preview performance styles", () => {
     expect(styles).toMatch(
       /\.c2v-candidate pre\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*100%;[^}]*max-height:\s*16rem;[^}]*overflow:\s*auto;[^}]*white-space:\s*pre-wrap;/s,
     );
+    expect(styles).toMatch(
+      /\.c2v-provider-panel\s*\{[^}]*min-width:\s*0;[^}]*overflow-wrap:\s*anywhere;/s,
+    );
+    expect(styles).toMatch(
+      /\.c2v-provider-actions\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s,
+    );
   });
 });
