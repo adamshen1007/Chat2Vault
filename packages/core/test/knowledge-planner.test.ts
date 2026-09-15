@@ -217,6 +217,77 @@ describe("M06 knowledge planner", () => {
     ).toContain("KNOWLEDGE_SOURCE_STALE");
   });
 
+  it("resolves an exact source among same-provider sources without conversation IDs", () => {
+    const exactConversationFingerprint = `sha256:${"5".repeat(64)}`;
+    const otherConversationFingerprint = `sha256:${"6".repeat(64)}`;
+    const exactSource = {
+      provider: "chatgpt" as const,
+      conversationFingerprint: exactConversationFingerprint,
+      messageFingerprints: [MESSAGE_FINGERPRINT],
+      sourceNotePath: "Sources/Exact.md",
+    };
+    const selected = candidate({
+      sourceRefs: [
+        {
+          provider: "chatgpt",
+          conversationFingerprint: exactConversationFingerprint,
+          messageFingerprints: [MESSAGE_FINGERPRINT],
+        },
+      ],
+    });
+    const preview = planKnowledgeWrite(
+      validInput({
+        candidates: [selected],
+        resolvedSources: [
+          {
+            ...exactSource,
+            conversationFingerprint: otherConversationFingerprint,
+            sourceNotePath: "Sources/Other.md",
+          },
+          exactSource,
+        ],
+        targetObservations: [],
+      }),
+    );
+    const targetPath = first(preview.entries).targetPath;
+
+    const plan = planKnowledgeWrite(
+      validInput({
+        candidates: [selected],
+        resolvedSources: [
+          {
+            ...exactSource,
+            conversationFingerprint: otherConversationFingerprint,
+            sourceNotePath: "Sources/Other.md",
+          },
+          exactSource,
+        ],
+        targetObservations: [{ targetPath, observation: { status: "absent" } }],
+      }),
+    );
+
+    expect(plan.status).toBe("ready");
+    expect(plan.diagnostics).toEqual([]);
+  });
+
+  it.each([
+    ["Sources.md", "sources.md"],
+    ["Café.md", "Cafe\u0301.md"],
+  ] as const)(
+    "rejects collision-equivalent source-root equality for root=%j path=%j",
+    (sourceRoot, sourceNotePath) => {
+      const source = first(validInput().resolvedSources);
+      expect(
+        codes(
+          validInput({
+            sourceRoot,
+            resolvedSources: [{ ...source, sourceNotePath }],
+          }),
+        ),
+      ).toContain("KNOWLEDGE_PATH_UNSAFE");
+    },
+  );
+
   it("sorts entries independent of candidate order", () => {
     const alpha = candidate({
       id: `sha256:${"a".repeat(64)}`,

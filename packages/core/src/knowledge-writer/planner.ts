@@ -109,7 +109,12 @@ function isSameOrAncestor(left: string, right: string): boolean {
 }
 
 function isBelow(root: string, path: string): boolean {
-  return root !== path && isSameOrAncestor(root, path);
+  const rootSegments = pathSegments(root);
+  const pathSegmentsValue = pathSegments(path);
+  return (
+    pathSegmentsValue.length > rootSegments.length &&
+    rootSegments.every((segment, index) => segment === pathSegmentsValue[index])
+  );
 }
 
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
@@ -145,18 +150,20 @@ function resolveCandidateSources(
     return { ok: false, code: "KNOWLEDGE_REVIEW_INVALID" };
   const sources: ResolvedKnowledgeSource[] = [];
   for (const reference of data.sourceRefs) {
-    const identityMatches = resolved.filter((source) =>
-      sameIdentity(source, reference),
+    const exactMatches = resolved.filter(
+      (source) =>
+        knowledgeRenderInternals.compareSources(source, reference) === 0,
     );
-    if (identityMatches.length === 0)
-      return { ok: false, code: "KNOWLEDGE_SOURCE_UNRESOLVED" };
-    if (identityMatches.length > 1)
+    if (exactMatches.length > 1)
       return { ok: false, code: "KNOWLEDGE_SOURCE_AMBIGUOUS" };
-    const match = identityMatches[0];
-    if (match === undefined)
-      return { ok: false, code: "KNOWLEDGE_SOURCE_UNRESOLVED" };
-    if (knowledgeRenderInternals.compareSources(match, reference) !== 0)
-      return { ok: false, code: "KNOWLEDGE_SOURCE_STALE" };
+    const match = exactMatches[0];
+    if (match === undefined) {
+      const stale = resolved.some((source) => sameIdentity(source, reference));
+      return {
+        ok: false,
+        code: stale ? "KNOWLEDGE_SOURCE_STALE" : "KNOWLEDGE_SOURCE_UNRESOLVED",
+      };
+    }
     sources.push({
       provider: match.provider,
       ...(match.providerConversationId === undefined
