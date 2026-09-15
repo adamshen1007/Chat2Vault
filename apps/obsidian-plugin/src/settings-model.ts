@@ -31,6 +31,14 @@ export interface Chat2VaultSettingsV3 {
   sourceRoot: string;
   provider: ProviderSettings;
 }
+export interface Chat2VaultSettingsV4 {
+  schemaVersion: 4;
+  installationId: string;
+  previewMessagesPerPage: PreviewMessagesPerPage;
+  sourceRoot: string;
+  knowledgeRoot: string;
+  provider: ProviderSettings;
+}
 
 /** Frozen M03 default, retained for the explicit future-schema v2 save path. */
 export const DEFAULT_SETTINGS: Chat2VaultSettingsV2 = {
@@ -48,6 +56,7 @@ export const DEFAULT_PROVIDER_SETTINGS: ProviderSettings = {
 
 export type SettingsLoadDiagnosticCode =
   | "INVALID_PERSISTED_SOURCE_ROOT"
+  | "INVALID_PERSISTED_KNOWLEDGE_ROOT"
   | "INVALID_PERSISTED_SETTINGS"
   | "UNSUPPORTED_SETTINGS_SCHEMA";
 export interface SettingsLoadDiagnostic {
@@ -72,7 +81,7 @@ export type ProviderReadiness =
       result: "saving" | "not-ready" | "settings-failed";
     };
 export interface SettingsLoadResult {
-  settings: Chat2VaultSettingsV3;
+  settings: Chat2VaultSettingsV4;
   diagnostics: AnySettingsLoadDiagnostic[];
   identityState: IdentityState;
   pendingProviderBasis?: ProviderSettings;
@@ -88,13 +97,20 @@ export type SettingsSaveResult =
   | {
       status: "invalid";
       message:
-        "The preview setting is invalid." | "The source folder is invalid.";
+        | "The preview setting is invalid."
+        | "The source folder is invalid."
+        | "The knowledge folder is invalid.";
     }
   | {
       status: "failed";
       message:
         | "The preview setting could not be saved."
-        | "The source folder setting could not be saved.";
+        | "The source folder setting could not be saved."
+        | "The knowledge folder setting could not be saved.";
+    }
+  | {
+      status: "unavailable";
+      message: "The knowledge folder is unavailable while the saved settings schema is unsupported.";
     };
 export type ProviderSettingsSaveResult =
   | { status: "saved" }
@@ -117,6 +133,7 @@ export type ProviderInitializationResult =
 export type SourceRootPersistenceState =
   | { status: "settled" }
   | { status: "pending"; previousRoot: string; proposedRoot: string };
+export type KnowledgeRootPersistenceState = SourceRootPersistenceState;
 export type ProviderSettingsPersistenceState =
   | { status: "settled" }
   | { status: "saving"; saveGeneration: number }
@@ -127,6 +144,8 @@ export type ProviderSettingsStatusCode =
 const MESSAGES: Record<SettingsLoadDiagnosticCode, string> = {
   INVALID_PERSISTED_SOURCE_ROOT:
     "The saved source folder is invalid and was disabled in memory.",
+  INVALID_PERSISTED_KNOWLEDGE_ROOT:
+    "The saved knowledge folder is invalid and was disabled in memory.",
   INVALID_PERSISTED_SETTINGS:
     "The saved Chat2Vault settings are invalid; safe defaults were loaded in memory.",
   UNSUPPORTED_SETTINGS_SCHEMA:
@@ -145,6 +164,14 @@ const V3_KEYS = [
   "installationId",
   "previewMessagesPerPage",
   "sourceRoot",
+  "provider",
+] as const;
+const V4_KEYS = [
+  "schemaVersion",
+  "installationId",
+  "previewMessagesPerPage",
+  "sourceRoot",
+  "knowledgeRoot",
   "provider",
 ] as const;
 const PROVIDER_KEYS = [
@@ -329,12 +356,13 @@ function validUuid(value: unknown): value is string {
 function copyProvider(provider: ProviderSettings): ProviderSettings {
   return { ...provider };
 }
-function defaultV3(installationId: string): Chat2VaultSettingsV3 {
+function defaultV4(installationId: string): Chat2VaultSettingsV4 {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     installationId,
     previewMessagesPerPage: 25,
     sourceRoot: "",
+    knowledgeRoot: "",
     provider: copyProvider(DEFAULT_PROVIDER_SETTINGS),
   };
 }
@@ -421,7 +449,7 @@ function readM03(value: unknown): M03Load {
       future: false,
     };
   const schema = record.schemaVersion;
-  if (typeof schema === "number" && Number.isSafeInteger(schema) && schema >= 4)
+  if (typeof schema === "number" && Number.isSafeInteger(schema) && schema >= 5)
     return {
       settings: { ...DEFAULT_SETTINGS },
       diagnostics: [diagnostic("UNSUPPORTED_SETTINGS_SCHEMA")],
@@ -485,7 +513,7 @@ function readM03(value: unknown): M03Load {
   };
 }
 function pending(
-  settings: Chat2VaultSettingsV3,
+  settings: Chat2VaultSettingsV4,
   diagnostics: AnySettingsLoadDiagnostic[],
 ): SettingsLoadResult {
   return {
@@ -503,9 +531,12 @@ export function readSettings(
   randomUuid: () => string = () => crypto.randomUUID(),
 ): SettingsLoadResult {
   const record = projectJsonObject(value);
-  if (record?.schemaVersion === 3) {
+  if (record?.schemaVersion === 3 || record?.schemaVersion === 4) {
     const diagnostics: AnySettingsLoadDiagnostic[] = [];
-    const exact = exactKeys(record, V3_KEYS);
+    const exact = exactKeys(
+      record,
+      record.schemaVersion === 3 ? V3_KEYS : V4_KEYS,
+    );
     if (!exact) diagnostics.push(diagnostic("INVALID_PERSISTED_SETTINGS"));
     const installationId = validUuid(record.installationId)
       ? record.installationId
@@ -523,6 +554,13 @@ export function readSettings(
       !diagnostics.some((item) => item.code === "INVALID_PERSISTED_SETTINGS")
     )
       diagnostics.push(diagnostic("INVALID_PERSISTED_SETTINGS"));
+    const malformedKnowledgeRoot =
+      record.schemaVersion === 4 && typeof record.knowledgeRoot !== "string";
+    if (
+      malformedKnowledgeRoot &&
+      !diagnostics.some((item) => item.code === "INVALID_PERSISTED_SETTINGS")
+    )
+      diagnostics.push(diagnostic("INVALID_PERSISTED_SETTINGS"));
     let sourceRoot = "";
     if (typeof record.sourceRoot !== "string") {
       if (
@@ -535,17 +573,27 @@ export function readSettings(
       else if (root.status === "invalid")
         diagnostics.push(diagnostic("INVALID_PERSISTED_SOURCE_ROOT"));
     }
+    let knowledgeRoot = "";
+    if (record.schemaVersion === 4) {
+      if (typeof record.knowledgeRoot === "string") {
+        const root = normalizeSourceRoot(record.knowledgeRoot);
+        if (root.status === "configured") knowledgeRoot = root.sourceRoot;
+        else if (root.status === "invalid")
+          diagnostics.push(diagnostic("INVALID_PERSISTED_KNOWLEDGE_ROOT"));
+      } else diagnostics.push(diagnostic("INVALID_PERSISTED_KNOWLEDGE_ROOT"));
+    }
     const recoveredProvider = persistedProvider(record.provider);
     const provider =
       recoveredProvider !== undefined
         ? copyProvider(recoveredProvider)
         : copyProvider(DEFAULT_PROVIDER_SETTINGS);
     if (recoveredProvider === undefined) diagnostics.push(providerDiagnostic());
-    const settings: Chat2VaultSettingsV3 = {
-      schemaVersion: 3,
+    const settings: Chat2VaultSettingsV4 = {
+      schemaVersion: 4,
       installationId,
       previewMessagesPerPage: page,
       sourceRoot,
+      knowledgeRoot,
       provider,
     };
     return validUuid(record.installationId)
@@ -563,7 +611,7 @@ export function readSettings(
   const inherited = readM03(value);
   if (inherited.future)
     return {
-      settings: defaultV3(""),
+      settings: defaultV4(""),
       diagnostics: inherited.diagnostics,
       identityState: "unsupported-future",
       providerReadiness: {
@@ -573,10 +621,11 @@ export function readSettings(
     };
   return pending(
     {
-      schemaVersion: 3,
+      schemaVersion: 4,
       installationId: randomUuid(),
       previewMessagesPerPage: inherited.settings.previewMessagesPerPage,
       sourceRoot: inherited.settings.sourceRoot,
+      knowledgeRoot: "",
       provider: copyProvider(DEFAULT_PROVIDER_SETTINGS),
     },
     inherited.diagnostics,
@@ -584,8 +633,8 @@ export function readSettings(
 }
 
 function m03Equal(
-  a: Pick<Chat2VaultSettingsV3, "previewMessagesPerPage" | "sourceRoot">,
-  b: Pick<Chat2VaultSettingsV3, "previewMessagesPerPage" | "sourceRoot">,
+  a: Pick<Chat2VaultSettingsV4, "previewMessagesPerPage" | "sourceRoot">,
+  b: Pick<Chat2VaultSettingsV4, "previewMessagesPerPage" | "sourceRoot">,
 ): boolean {
   return (
     a.previewMessagesPerPage === b.previewMessagesPerPage &&
@@ -593,10 +642,12 @@ function m03Equal(
   );
 }
 export interface SettingsControllerHooks {
-  /** Called only after a complete v3 snapshot has fulfilled persistence. */
+  /** Called only after a complete v4 snapshot has fulfilled persistence. */
   onIdentityAuthorized?: (installationId: string) => void;
   /** Provider integration supplies its own cancellation/owner invalidation here. */
   invalidateProviderOwnerAndAbort?: () => void;
+  /** Knowledge integration invalidates any review/plan owner at accepted-save start. */
+  invalidateKnowledgeState?: () => void;
 }
 
 /**
@@ -611,7 +662,7 @@ export class SettingsController {
   private lifecycleGeneration = 0;
   private pendingIdentity:
     { installationId: string; providerBasis: ProviderSettings } | undefined;
-  public settings: Chat2VaultSettingsV3;
+  public settings: Chat2VaultSettingsV4;
   public identityState: IdentityState | "saving" | "failed";
   public providerReadiness: ProviderReadiness;
   public providerDraft: ProviderSettings;
@@ -625,10 +676,14 @@ export class SettingsController {
   public sourceRootPersistenceState: SourceRootPersistenceState = {
     status: "settled",
   };
+  public knowledgeWriteGeneration = 0;
+  public knowledgeRootPersistenceState: KnowledgeRootPersistenceState = {
+    status: "settled",
+  };
   public constructor(
-    loaded: SettingsLoadResult | Chat2VaultSettingsV3,
+    loaded: SettingsLoadResult | Chat2VaultSettingsV4,
     private readonly persist: (
-      settings: Chat2VaultSettingsV3 | Chat2VaultSettingsV2,
+      settings: Chat2VaultSettingsV4 | Chat2VaultSettingsV2,
     ) => Promise<void>,
     private readonly invalidateSourceState: () => void,
     private readonly hooks: SettingsControllerHooks = {},
@@ -678,19 +733,26 @@ export class SettingsController {
   private candidate(
     page = this.settings.previewMessagesPerPage,
     root = this.settings.sourceRoot,
-  ): Chat2VaultSettingsV3 {
+    knowledgeRoot = this.settings.knowledgeRoot,
+  ): Chat2VaultSettingsV4 {
     const pendingIdentity = this.pendingIdentity;
     return pendingIdentity === undefined
-      ? { ...this.settings, previewMessagesPerPage: page, sourceRoot: root }
+      ? {
+          ...this.settings,
+          previewMessagesPerPage: page,
+          sourceRoot: root,
+          knowledgeRoot,
+        }
       : {
-          schemaVersion: 3,
+          schemaVersion: 4,
           installationId: pendingIdentity.installationId,
           previewMessagesPerPage: page,
           sourceRoot: root,
+          knowledgeRoot,
           provider: copyProvider(pendingIdentity.providerBasis),
         };
   }
-  private installIdentity(candidate: Chat2VaultSettingsV3): void {
+  private installIdentity(candidate: Chat2VaultSettingsV4): void {
     this.settings = candidate;
     this.providerDraft = copyProvider(candidate.provider);
     this.pendingIdentity = undefined;
@@ -938,6 +1000,54 @@ export class SettingsController {
         };
       } finally {
         this.sourceRootPersistenceState = { status: "settled" };
+      }
+    } finally {
+      this.releaseSettingsMutex();
+    }
+  }
+  public async saveKnowledgeRoot(value: unknown): Promise<SettingsSaveResult> {
+    if (!this.tryAcquire()) return this.inProgress();
+    try {
+      if (this.identityState === "unsupported-future")
+        return {
+          status: "unavailable",
+          message:
+            "The knowledge folder is unavailable while the saved settings schema is unsupported.",
+        };
+      const normalized = normalizeSourceRoot(value);
+      if (normalized.status === "invalid")
+        return {
+          status: "invalid",
+          message: "The knowledge folder is invalid.",
+        };
+      const root =
+        normalized.status === "configured" ? normalized.sourceRoot : "";
+      const previous = this.settings;
+      if (previous.knowledgeRoot === root) return { status: "unchanged" };
+      const next = this.candidate(
+        previous.previewMessagesPerPage,
+        previous.sourceRoot,
+        root,
+      );
+      this.knowledgeRootPersistenceState = {
+        status: "pending",
+        previousRoot: previous.knowledgeRoot,
+        proposedRoot: root,
+      };
+      try {
+        this.hooks.invalidateKnowledgeState?.();
+        await this.persist(next);
+        this.settings = next;
+        this.knowledgeWriteGeneration += 1;
+        if (this.pendingIdentity !== undefined) this.installIdentity(next);
+        return { status: "saved" };
+      } catch {
+        return {
+          status: "failed",
+          message: "The knowledge folder setting could not be saved.",
+        };
+      } finally {
+        this.knowledgeRootPersistenceState = { status: "settled" };
       }
     } finally {
       this.releaseSettingsMutex();

@@ -11,6 +11,8 @@ import { Chat2VaultView, VIEW_TYPE } from "../src/view.js";
 import { Chat2VaultSettingTab } from "../src/settings.js";
 import { readSettings, SettingsController } from "../src/settings-model.js";
 
+const settingsTextChangeHandlers: ((value: string) => Promise<void>)[] = [];
+
 beforeAll(() => {
   PluginSettingTab.prototype.hide = function (): void {
     this.containerEl.replaceChildren();
@@ -27,7 +29,8 @@ beforeAll(() => {
       setPlaceholder() {
         return this;
       },
-      onChange() {
+      onChange(callback: (value: string) => Promise<void>) {
+        settingsTextChangeHandlers.push(callback);
         return this;
       },
       setDisabled() {
@@ -80,6 +83,101 @@ beforeAll(() => {
 });
 
 describe("plugin command lifecycle", () => {
+  it("renders the M06 knowledge folder and fixed save results", async () => {
+    settingsTextChangeHandlers.length = 0;
+    const results = [
+      {
+        status: "invalid" as const,
+        message: "The knowledge folder is invalid." as const,
+      },
+      {
+        status: "failed" as const,
+        message: "The knowledge folder setting could not be saved." as const,
+      },
+      {
+        status: "in-progress" as const,
+        message: "A Chat2Vault setting is already being saved." as const,
+      },
+    ];
+    const values: string[] = [];
+    const owner = {
+      settings: {
+        schemaVersion: 4 as const,
+        installationId: "11111111-1111-4111-8111-111111111111",
+        previewMessagesPerPage: 25 as const,
+        sourceRoot: "Sources",
+        knowledgeRoot: "Knowledge",
+        provider: {
+          endpoint: "",
+          model: "",
+          timeoutMs: 60_000 as const,
+          maxOutputTokens: 4_096,
+          cloudDisclosureAccepted: false,
+        },
+      },
+      identityState: "authoritative" as const,
+      credentialState: "missing" as const,
+      providerDraft: {
+        endpoint: "",
+        model: "",
+        timeoutMs: 60_000 as const,
+        maxOutputTokens: 4_096,
+        cloudDisclosureAccepted: false,
+      },
+      savePreviewMessagesPerPage: () =>
+        Promise.resolve({ status: "unchanged" as const }),
+      saveSourceRoot: () => Promise.resolve({ status: "unchanged" as const }),
+      saveKnowledgeRoot(value: unknown) {
+        expect(this).toBe(owner);
+        values.push(String(value));
+        return Promise.resolve(results.shift());
+      },
+      setProviderDraft: () => undefined,
+      saveProviderSettings: () => Promise.resolve({ status: "saved" as const }),
+      retryProviderInitialization: () =>
+        Promise.resolve({ status: "unchanged" as const }),
+      setProviderCredential: () => ({
+        ok: true as const,
+        status: "configured" as const,
+      }),
+      deleteProviderCredential: () => ({
+        ok: true as const,
+        status: "missing" as const,
+      }),
+      refreshProviderCredential: () => ({
+        ok: true as const,
+        status: "missing" as const,
+      }),
+    };
+    const tab = new Chat2VaultSettingTab({} as App, owner as never);
+    tab.display();
+    expect(tab.containerEl.textContent).toContain(
+      "Accepted knowledge notes are created only after an exact dry-run and an explicit Write action.",
+    );
+    const knowledgeChange = settingsTextChangeHandlers.at(-1);
+    if (knowledgeChange === undefined)
+      throw new Error("missing knowledge folder change handler");
+    const statuses = (): string[] =>
+      Array.from(tab.containerEl.querySelectorAll("p"))
+        .map((item) => item.textContent)
+        .filter(
+          (item) =>
+            item.startsWith("The knowledge folder") ||
+            item.startsWith("A Chat2Vault setting"),
+        );
+    await knowledgeChange("../escape");
+    expect(statuses()).toEqual(["The knowledge folder is invalid."]);
+    await knowledgeChange("Other");
+    expect(statuses()).toEqual([
+      "The knowledge folder setting could not be saved.",
+    ]);
+    await knowledgeChange("Busy");
+    expect(statuses()).toEqual([
+      "A Chat2Vault setting is already being saved.",
+    ]);
+    expect(values).toEqual(["../escape", "Other", "Busy"]);
+  });
+
   it("renders the exact provider disclosure, five draft controls, and Keychain actions without identity or secret leakage", () => {
     const owner = {
       settings: {
@@ -672,9 +770,10 @@ describe("plugin command lifecycle", () => {
     await plugin.savePreviewMessagesPerPage(50);
     await plugin.saveSourceRoot("Sources");
     expect(harness.savedData).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       previewMessagesPerPage: 50,
       sourceRoot: "Sources",
+      knowledgeRoot: "",
       provider: {
         endpoint: "",
         model: "",
@@ -688,6 +787,7 @@ describe("plugin command lifecycle", () => {
       "installationId",
       "previewMessagesPerPage",
       "sourceRoot",
+      "knowledgeRoot",
       "provider",
     ]);
     harness.commands[0]?.callback();
@@ -732,7 +832,7 @@ describe("plugin command lifecycle", () => {
       { schemaVersion: 99, future: { kept: true } },
     ],
   ] as const)(
-    "migrates supported/safe-default settings to v3 and leaves a future schema byte-identical for fixture %#",
+    "migrates supported/safe-default settings to v4 and leaves a future schema byte-identical for fixture %#",
     async (rawBytes, parsed) => {
       const plugin = new Chat2VaultPlugin({} as App, {
         id: "chat-to-vault",
@@ -758,7 +858,8 @@ describe("plugin command lifecycle", () => {
         expect(saves).toBe(0);
       } else {
         expect(JSON.parse(persistedBytes)).toMatchObject({
-          schemaVersion: 3,
+          schemaVersion: 4,
+          knowledgeRoot: "",
           provider: {
             endpoint: "",
             model: "",

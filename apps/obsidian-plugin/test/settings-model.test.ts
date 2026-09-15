@@ -14,6 +14,20 @@ const provider = {
   cloudDisclosureAccepted: true,
 } as const;
 
+const validV3 = {
+  schemaVersion: 3 as const,
+  installationId: UUID,
+  previewMessagesPerPage: 25 as const,
+  sourceRoot: "Sources",
+  provider,
+};
+
+const validV4 = {
+  ...validV3,
+  schemaVersion: 4 as const,
+  knowledgeRoot: "Knowledge",
+};
+
 describe("M05 settings v3", () => {
   it("migrates each valid M03 family to one pending v3 identity", () => {
     for (const value of [
@@ -27,8 +41,9 @@ describe("M05 settings v3", () => {
     ]) {
       const loaded = readSettings(value, () => UUID);
       expect(loaded.settings).toMatchObject({
-        schemaVersion: 3,
+        schemaVersion: 4,
         installationId: UUID,
+        knowledgeRoot: "",
         provider: DEFAULT_PROVIDER_SETTINGS,
       });
       expect(loaded.identityState).toBe("pending");
@@ -58,10 +73,11 @@ describe("M05 settings v3", () => {
       () => UUID,
     );
     expect(loaded.settings).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       installationId: UUID,
       previewMessagesPerPage: 25,
       sourceRoot: "",
+      knowledgeRoot: "",
       provider: DEFAULT_PROVIDER_SETTINGS,
     });
     expect(loaded.diagnostics.map((item) => item.code)).toEqual([
@@ -82,10 +98,11 @@ describe("M05 settings v3", () => {
     });
     expect(loaded.identityState).toBe("authoritative");
     expect(loaded.settings).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       installationId: UUID,
       previewMessagesPerPage: 50,
       sourceRoot: "Sources",
+      knowledgeRoot: "",
       provider,
     });
   });
@@ -138,8 +155,9 @@ describe("M05 settings v3", () => {
       const before = JSON.stringify(value);
       const loaded = readSettings(value, () => UUID);
       expect(loaded.settings).toMatchObject({
-        schemaVersion: 3,
+        schemaVersion: 4,
         installationId: UUID,
+        knowledgeRoot: "",
         provider: DEFAULT_PROVIDER_SETTINGS,
       });
       expect(loaded.diagnostics.map((item) => item.code)).toEqual(diagnostics);
@@ -186,7 +204,7 @@ describe("M05 settings v3", () => {
       expect(readSettings(unsafe, () => UUID).identityState).toBe("pending");
     }
     const future = readSettings(
-      { schemaVersion: 4, opaque: { preserve: true } },
+      { schemaVersion: 5, opaque: { preserve: true } },
       () => {
         throw new Error("no UUID");
       },
@@ -250,10 +268,11 @@ describe("M05 settings v3", () => {
       status: "saved",
     });
     expect(writes.at(-1)).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       installationId: UUID,
       previewMessagesPerPage: 25,
       sourceRoot: "Sources",
+      knowledgeRoot: "",
       provider,
     });
   });
@@ -289,10 +308,11 @@ describe("M05 settings v3", () => {
     release();
     await saving;
     expect(writes[0]).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       installationId: UUID,
       previewMessagesPerPage: 50,
       sourceRoot: "",
+      knowledgeRoot: "",
       provider,
     });
   });
@@ -558,12 +578,20 @@ describe("M05 settings v3", () => {
         throw new Error("imported property must not be read");
       },
     });
-    expect(readSettings(hostile).settings).toEqual(source);
+    expect(readSettings(hostile).settings).toEqual({
+      ...source,
+      schemaVersion: 4,
+      knowledgeRoot: "",
+    });
 
     const revocable = Proxy.revocable(source, {});
     const loaded = readSettings(revocable.proxy);
     revocable.revoke();
-    expect(loaded.settings).toEqual(source);
+    expect(loaded.settings).toEqual({
+      ...source,
+      schemaVersion: 4,
+      knowledgeRoot: "",
+    });
   });
 
   it("rejects every remaining unsafe object and nested-array category", () => {
@@ -851,7 +879,7 @@ describe("M05 settings v3", () => {
     expect(uuidCalls).toBe(0);
     expect(writes).toEqual([]);
 
-    const futureBytes = JSON.stringify({ schemaVersion: 4, opaque: [1, 2] });
+    const futureBytes = JSON.stringify({ schemaVersion: 5, opaque: [1, 2] });
     const futureValue = JSON.parse(futureBytes) as unknown;
     const future = readSettings(futureValue, () => {
       throw new Error("future must not generate UUID");
@@ -1069,10 +1097,11 @@ describe("M05 settings v3", () => {
     });
     expect(reloaded.identityState).toBe("authoritative");
     expect(reloaded.settings).toEqual({
-      schemaVersion: 3,
+      schemaVersion: 4,
       installationId: UUID,
       previewMessagesPerPage: 50,
       sourceRoot: "Sources",
+      knowledgeRoot: "",
       provider,
     });
     expect(uuidCalls).toBe(0);
@@ -1121,4 +1150,236 @@ describe("M05 settings v3", () => {
       );
     },
   );
+});
+
+describe("M06 settings v4", () => {
+  it("migrates exact valid v3 in memory and loads exact valid v4 without changing identity", () => {
+    let uuidCalls = 0;
+    expect(
+      readSettings(validV3, () => {
+        uuidCalls += 1;
+        return UUID;
+      }),
+    ).toMatchObject({
+      settings: {
+        ...validV3,
+        schemaVersion: 4,
+        knowledgeRoot: "",
+      },
+      identityState: "authoritative",
+      diagnostics: [],
+    });
+    expect(readSettings(validV4)).toMatchObject({
+      settings: validV4,
+      identityState: "authoritative",
+      diagnostics: [],
+    });
+    expect(uuidCalls).toBe(0);
+  });
+
+  it("treats safe integer schema 5 and above as unsupported future settings", () => {
+    for (const schemaVersion of [5, Number.MAX_SAFE_INTEGER])
+      expect(readSettings({ ...validV4, schemaVersion })).toMatchObject({
+        identityState: "unsupported-future",
+        providerReadiness: {
+          state: "unavailable",
+          result: "unsupported-settings",
+        },
+      });
+  });
+
+  it("recovers source, knowledge, and provider fields independently in exact diagnostic order", () => {
+    const loaded = readSettings({
+      ...validV4,
+      sourceRoot: "../source-escape",
+      knowledgeRoot: "../knowledge-escape",
+      provider: { ...provider, extra: true },
+    });
+    expect(loaded.settings).toEqual({
+      ...validV4,
+      sourceRoot: "",
+      knowledgeRoot: "",
+      provider: DEFAULT_PROVIDER_SETTINGS,
+    });
+    expect(loaded.diagnostics.map((item) => item.code)).toEqual([
+      "INVALID_PERSISTED_SOURCE_ROOT",
+      "INVALID_PERSISTED_KNOWLEDGE_ROOT",
+      "PROVIDER_SETTINGS_INVALID",
+    ]);
+
+    const malformedKnowledge = readSettings({
+      ...validV4,
+      sourceRoot: "../source-escape",
+      knowledgeRoot: 7,
+    });
+    expect(malformedKnowledge.diagnostics.map((item) => item.code)).toEqual([
+      "INVALID_PERSISTED_SETTINGS",
+      "INVALID_PERSISTED_SOURCE_ROOT",
+      "INVALID_PERSISTED_KNOWLEDGE_ROOT",
+    ]);
+  });
+
+  it("preserves independently valid overlapping roots for writer-time validation", () => {
+    const loaded = readSettings({
+      ...validV4,
+      sourceRoot: "Sources",
+      knowledgeRoot: "Sources/Knowledge",
+    });
+    expect(loaded.settings).toMatchObject({
+      sourceRoot: "Sources",
+      knowledgeRoot: "Sources/Knowledge",
+    });
+    expect(loaded.diagnostics).toEqual([]);
+  });
+
+  it("persists an exact complete v4 knowledge-root snapshot and settles authority atomically", async () => {
+    let fulfill!: () => void;
+    const writes: unknown[] = [];
+    const observations: unknown[] = [];
+    const controller = new SettingsController(
+      readSettings(validV4),
+      (value) => {
+        writes.push(structuredClone(value));
+        return new Promise<void>((resolve) => {
+          fulfill = resolve;
+        });
+      },
+      () => undefined,
+      {
+        invalidateKnowledgeState: () => {
+          observations.push({
+            settings: structuredClone(controller.settings),
+            persistence: controller.knowledgeRootPersistenceState,
+            generation: controller.knowledgeWriteGeneration,
+          });
+        },
+      },
+    );
+
+    const saving = controller.saveKnowledgeRoot("Knowledge/Cafe\u0301");
+    expect(writes).toEqual([
+      {
+        ...validV4,
+        knowledgeRoot: "Knowledge/Caf\u00e9",
+      },
+    ]);
+    expect(observations).toEqual([
+      {
+        settings: validV4,
+        persistence: {
+          status: "pending",
+          previousRoot: "Knowledge",
+          proposedRoot: "Knowledge/Caf\u00e9",
+        },
+        generation: 0,
+      },
+    ]);
+    expect(controller.settings).toEqual(validV4);
+    fulfill();
+    await expect(saving).resolves.toEqual({ status: "saved" });
+    expect(controller.settings.knowledgeRoot).toBe("Knowledge/Caf\u00e9");
+    expect(controller.knowledgeWriteGeneration).toBe(1);
+    expect(controller.knowledgeRootPersistenceState).toEqual({
+      status: "settled",
+    });
+  });
+
+  it("keeps prior knowledge authority and generation on invalid, unchanged, and failed saves", async () => {
+    const invalidations: string[] = [];
+    const controller = new SettingsController(
+      readSettings(validV4),
+      () => Promise.reject(new Error("synthetic persistence failure")),
+      () => undefined,
+      {
+        invalidateKnowledgeState: () => invalidations.push("knowledge"),
+      },
+    );
+    await expect(controller.saveKnowledgeRoot("../escape")).resolves.toEqual({
+      status: "invalid",
+      message: "The knowledge folder is invalid.",
+    });
+    await expect(controller.saveKnowledgeRoot("Knowledge")).resolves.toEqual({
+      status: "unchanged",
+    });
+    await expect(controller.saveKnowledgeRoot("Other")).resolves.toEqual({
+      status: "failed",
+      message: "The knowledge folder setting could not be saved.",
+    });
+    expect(controller.settings).toEqual(validV4);
+    expect(controller.knowledgeWriteGeneration).toBe(0);
+    expect(invalidations).toEqual(["knowledge"]);
+  });
+
+  it("fails closed and settles when knowledge invalidation throws", async () => {
+    let persistCalls = 0;
+    const controller = new SettingsController(
+      readSettings(validV4),
+      () => {
+        persistCalls += 1;
+        return Promise.resolve();
+      },
+      () => undefined,
+      {
+        invalidateKnowledgeState: () => {
+          throw new Error("synthetic invalidation failure");
+        },
+      },
+    );
+    await expect(controller.saveKnowledgeRoot("Other")).resolves.toEqual({
+      status: "failed",
+      message: "The knowledge folder setting could not be saved.",
+    });
+    expect(persistCalls).toBe(0);
+    expect(controller.settings).toEqual(validV4);
+    expect(controller.knowledgeWriteGeneration).toBe(0);
+    expect(controller.knowledgeRootPersistenceState).toEqual({
+      status: "settled",
+    });
+    expect(controller.isSaving).toBe(false);
+  });
+
+  it("preserves knowledgeRoot through every existing v4 save and shares one non-queuing mutex", async () => {
+    const owners = [
+      (controller: SettingsController) =>
+        controller.savePreviewMessagesPerPage(50),
+      (controller: SettingsController) => controller.saveSourceRoot("Other"),
+      (controller: SettingsController) =>
+        controller.saveProviderSettings({ ...provider, model: "other" }),
+      (controller: SettingsController) =>
+        controller.saveKnowledgeRoot("Other knowledge"),
+    ];
+    for (const start of owners) {
+      let release!: () => void;
+      const writes: unknown[] = [];
+      const controller = new SettingsController(
+        readSettings(validV4),
+        (value) => {
+          writes.push(structuredClone(value));
+          return new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        },
+        () => undefined,
+        { invalidateKnowledgeState: () => undefined },
+      );
+      const inFlight = start(controller);
+      await expect(controller.saveKnowledgeRoot("Blocked")).resolves.toEqual({
+        status: "in-progress",
+        message: "A Chat2Vault setting is already being saved.",
+      });
+      await expect(controller.saveSourceRoot("Blocked")).resolves.toEqual({
+        status: "in-progress",
+        message: "A Chat2Vault setting is already being saved.",
+      });
+      await expect(controller.saveProviderSettings(provider)).resolves.toEqual({
+        status: "in-progress",
+        code: "PROVIDER_SETTINGS_OPERATION_IN_PROGRESS",
+      });
+      expect((writes[0] as { knowledgeRoot: string }).knowledgeRoot).toBe(
+        start === owners[3] ? "Other knowledge" : "Knowledge",
+      );
+      release();
+      await inFlight;
+    }
+  });
 });
