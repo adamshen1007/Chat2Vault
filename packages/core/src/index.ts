@@ -141,3 +141,18 @@ export type {
   SourceNoteRenderInput,
   SourceNoteRenderResult,
 } from "./source-writer/primitives.js";
+export type {
+  KnowledgeDecision,
+  KnowledgeReviewEdit,
+  KnowledgeReviewEditResult,
+  M06Diagnostic,
+  M06DiagnosticCode,
+  ReviewedKnowledgeCandidate,
+} from "./knowledge-writer/contracts.js";
+export {
+  createKnowledgeReview,
+  editKnowledgeCandidate,
+  m06Diagnostic,
+  setKnowledgeDecision,
+  setKnowledgeSelected,
+} from "./knowledge-writer/review.js";
