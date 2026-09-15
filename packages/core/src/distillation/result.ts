@@ -1,4 +1,5 @@
 import { compareStableStrings, sha256 } from "../fingerprint/stable-json.js";
+import { parseStrictJson } from "../internal/strict-json.js";
 import {
   M04_BODY_MAX_UTF16,
   M04_BODY_MAX_UTF8,
@@ -99,152 +100,6 @@ function hasLiteralUnpairedSurrogate(value: string): boolean {
     } else if (unit >= 0xdc00 && unit <= 0xdfff) return true;
   }
   return false;
-}
-
-class StrictJsonParser {
-  private index = 0;
-  public constructor(private readonly source: string) {}
-
-  public parse(): unknown {
-    this.whitespace();
-    const value = this.value();
-    this.whitespace();
-    if (this.index !== this.source.length) throw new Error("trailing");
-    return value;
-  }
-
-  private whitespace(): void {
-    while (
-      this.source[this.index] === " " ||
-      this.source[this.index] === "\t" ||
-      this.source[this.index] === "\n" ||
-      this.source[this.index] === "\r"
-    )
-      this.index += 1;
-  }
-
-  private value(): unknown {
-    const current = this.source[this.index];
-    if (current === '"') return this.string();
-    if (current === "{") return this.object();
-    if (current === "[") return this.array();
-    if (current === "t") return this.literal("true", true);
-    if (current === "f") return this.literal("false", false);
-    if (current === "n") return this.literal("null", null);
-    if (current === "-" || (current !== undefined && /[0-9]/u.test(current)))
-      return this.number();
-    throw new Error("value");
-  }
-
-  private literal<T>(text: string, value: T): T {
-    if (this.source.slice(this.index, this.index + text.length) !== text)
-      throw new Error("literal");
-    this.index += text.length;
-    return value;
-  }
-
-  private number(): number {
-    const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/u.exec(
-      this.source.slice(this.index),
-    );
-    if (match === null) throw new Error("number");
-    this.index += match[0].length;
-    const value = Number(match[0]);
-    if (!Number.isFinite(value)) throw new Error("number-range");
-    return value;
-  }
-
-  private unicodeEscape(): string {
-    const hex = this.source.slice(this.index, this.index + 4);
-    if (!/^[0-9a-fA-F]{4}$/u.test(hex)) throw new Error("unicode");
-    this.index += 4;
-    const first = Number.parseInt(hex, 16);
-    if (first >= 0xd800 && first <= 0xdbff) {
-      if (this.source.slice(this.index, this.index + 2) !== "\\u")
-        throw new Error("surrogate");
-      this.index += 2;
-      const lowHex = this.source.slice(this.index, this.index + 4);
-      if (!/^[0-9a-fA-F]{4}$/u.test(lowHex)) throw new Error("surrogate");
-      this.index += 4;
-      const low = Number.parseInt(lowHex, 16);
-      if (low < 0xdc00 || low > 0xdfff) throw new Error("surrogate");
-      return String.fromCodePoint(
-        0x10000 + ((first - 0xd800) << 10) + (low - 0xdc00),
-      );
-    }
-    if (first >= 0xdc00 && first <= 0xdfff) throw new Error("surrogate");
-    return String.fromCharCode(first);
-  }
-
-  private string(): string {
-    this.index += 1;
-    let output = "";
-    while (this.index < this.source.length) {
-      const current = this.source[this.index++];
-      if (current === undefined) throw new Error("string");
-      if (current === '"') return output;
-      if (current.charCodeAt(0) <= 0x1f) throw new Error("control");
-      if (current !== "\\") {
-        output += current;
-        continue;
-      }
-      const escaped = this.source[this.index++];
-      if (escaped === '"' || escaped === "\\" || escaped === "/")
-        output += escaped;
-      else if (escaped === "b") output += "\b";
-      else if (escaped === "f") output += "\f";
-      else if (escaped === "n") output += "\n";
-      else if (escaped === "r") output += "\r";
-      else if (escaped === "t") output += "\t";
-      else if (escaped === "u") output += this.unicodeEscape();
-      else throw new Error("escape");
-    }
-    throw new Error("string");
-  }
-
-  private array(): unknown[] {
-    this.index += 1;
-    this.whitespace();
-    const result: unknown[] = [];
-    if (this.source[this.index] === "]") {
-      this.index += 1;
-      return result;
-    }
-    for (;;) {
-      result.push(this.value());
-      this.whitespace();
-      const current = this.source[this.index++];
-      if (current === "]") return result;
-      if (current !== ",") throw new Error("array");
-      this.whitespace();
-    }
-  }
-
-  private object(): Record<string, unknown> {
-    this.index += 1;
-    this.whitespace();
-    const entries: [string, unknown][] = [];
-    const names = new Set<string>();
-    if (this.source[this.index] === "}") {
-      this.index += 1;
-      return {};
-    }
-    for (;;) {
-      if (this.source[this.index] !== '"') throw new Error("member");
-      const name = this.string();
-      if (names.has(name)) throw new Error("duplicate");
-      names.add(name);
-      this.whitespace();
-      if (this.source[this.index++] !== ":") throw new Error("colon");
-      this.whitespace();
-      entries.push([name, this.value()]);
-      this.whitespace();
-      const current = this.source[this.index++];
-      if (current === "}") return Object.fromEntries(entries);
-      if (current !== ",") throw new Error("object");
-      this.whitespace();
-    }
-  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -488,7 +343,7 @@ export function validateDistillationResult(
     };
   let parsed: unknown;
   try {
-    parsed = new StrictJsonParser(raw).parse();
+    parsed = parseStrictJson(raw);
   } catch {
     return {
       ok: false,

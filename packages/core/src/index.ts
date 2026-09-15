@@ -34,6 +34,41 @@ export {
   toM03WellFormedString,
 } from "./source-writer/primitives.js";
 export {
+  M05_DIAGNOSTICS,
+  M05_ENDPOINT_MAX_UTF8_BYTES,
+  M05_MODEL_MAX_UTF16,
+  M05_MODEL_MAX_UTF8_BYTES,
+  M05_OUTPUT_TOKEN_MAX,
+  M05_REQUEST_MAX_UTF8_BYTES,
+  M05_RESPONSE_MAX_UTF8_BYTES,
+  M05_SECRET_MAX_ASCII,
+  M05_TIMEOUTS,
+} from "./provider/contracts.js";
+export type {
+  M05DiagnosticCode,
+  M05DiagnosticDefinition,
+  M05DiagnosticSeverity,
+  M05ProviderConfig,
+  M05ProviderTimeout,
+  ProviderRequestInput,
+  ProviderRequestResult,
+  ProviderResponseResult,
+  ProviderUsage,
+} from "./provider/contracts.js";
+export {
+  validateProviderEndpoint,
+  validateProviderModel,
+  validateProviderOutputCap,
+  validateProviderSecret,
+  validateProviderTimeout,
+} from "./provider/config.js";
+export { classifyPublicAddress } from "./provider/address.js";
+export type { AddressResult } from "./provider/address.js";
+export {
+  buildProviderRequest,
+  parseProviderResponse,
+} from "./provider/envelope.js";
+export {
   M04_BODY_MAX_UTF16,
   M04_BODY_MAX_UTF8,
   M04_CONTRACT_VERSION,

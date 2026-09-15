@@ -135,6 +135,59 @@
 .c2v-distillation-diagnostics p {
   overflow-wrap: anywhere;
 }
+.c2v-provider-panel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  margin-block: var(--size-4-5);
+  border-top: 1px solid var(--c2v-rule);
+  padding-top: var(--size-4-4);
+}
+.c2v-provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  align-items: center;
+}
+.c2v-provider-controls,
+.c2v-provider-settings,
+.c2v-provider-notice,
+.c2v-provider-disclosure,
+.c2v-provider-preflight,
+.c2v-provider-usage,
+.c2v-provider-status {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.c2v-provider-controls > input,
+.c2v-provider-controls > select,
+.c2v-provider-key {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin-block: var(--size-4-2);
+}
+.c2v-provider-preflight {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) minmax(0, 1fr);
+  gap: var(--size-4-1) var(--size-4-3);
+}
+.c2v-provider-preflight dt {
+  font-weight: var(--font-semibold);
+}
+.c2v-provider-preflight dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.c2v-provider-actions button:focus-visible,
+.c2v-provider-controls input:focus-visible,
+.c2v-provider-controls select:focus-visible,
+.c2v-provider-key:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
 .c2v-diagnostics {
   border-top: 1px solid var(--c2v-rule);
   padding-top: var(--size-4-3);
@@ -161,6 +214,9 @@
   .c2v-diagnostic {
     grid-template-columns: 1fr;
   }
+  .c2v-provider-preflight {
+    grid-template-columns: 1fr;
+  }
 }
 @container (max-width: 480px) {
   .c2v-layout {
@@ -172,6 +228,9 @@
     padding: 0 0 var(--size-4-4);
   }
   .c2v-diagnostic {
+    grid-template-columns: 1fr;
+  }
+  .c2v-provider-preflight {
     grid-template-columns: 1fr;
   }
 }

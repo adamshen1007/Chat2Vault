@@ -9,6 +9,7 @@ import {
   type DistillationValidationResult,
   type ImportDiagnostic,
   type ImportResult,
+  type PreviewCandidate,
 } from "@chat2vault/core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -197,6 +198,185 @@ async function openResult(
 }
 
 describe("preview view", () => {
+  it("renders provider preflight and execute controls without candidate write actions", async () => {
+    const item = manualConversation();
+    const controller = new ImportController(() =>
+      Promise.resolve(importResult([item])),
+    );
+    const Constructor = Chat2VaultView as unknown as new (
+      ...args: unknown[]
+    ) => Chat2VaultView;
+    const transport = vi.fn(() =>
+      Promise.resolve({
+        ok: false as const,
+        code: "PROVIDER_NETWORK_FAILED" as const,
+      }),
+    );
+    let credentialState = "configured" as
+      "configured" | "missing" | "unknown" | "unavailable";
+    let providerSettingsStatusCode:
+      "PROVIDER_SETTINGS_SAVING" | "PROVIDER_SETTINGS_SAVE_FAILED" | undefined;
+    let stateObserver: (() => void) | undefined;
+    const view = new Constructor(
+      {},
+      controller,
+      () => 25,
+      undefined,
+      { writeClipboard: () => Promise.resolve() },
+      {
+        current: () => ({
+          platformEligible: true,
+          unsupportedFutureSettings: false,
+          identityState: "authoritative",
+          credentialState,
+          credentialOperationInProgress: false,
+          providerSettingsSaving: false,
+          providerSettingsStatusCode,
+          cloudDisclosureAccepted: true,
+          providerSettingsGeneration: 1,
+          providerSaveGeneration: 1,
+          credentialGeneration: 1,
+          config: {
+            endpoint: "https://m05.invalid/v1/chat/completions",
+            hostname: "m05.invalid",
+            port: 443,
+            model: "synthetic-m05-model",
+            timeoutMs: 60_000,
+            maxOutputTokens: 4_096,
+          },
+        }),
+        readCredential: () => ({ ok: true, secret: "synthetic-key" }),
+        transport,
+        observeCredentialOnViewOpen: () => ({ ok: true, status: "configured" }),
+        registerInvalidator: () => () => undefined,
+        registerStateObserver: (observer: () => void) => {
+          stateObserver = observer;
+          return () => {
+            stateObserver = undefined;
+          };
+        },
+      },
+    );
+    document.body.append(view.contentEl);
+    await view.onOpen();
+    await controller.import([
+      {
+        name: "synthetic.json",
+        size: 1,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)),
+      },
+    ]);
+    view.contentEl.querySelector<HTMLButtonElement>(".c2v-row")?.click();
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Prepare manual prompt"]')
+      ?.click();
+    await flush();
+
+    for (const text of [
+      "Destination",
+      "Model",
+      "Prompt bytes",
+      "Maximum output tokens",
+      "Distill with provider",
+    ])
+      expect(view.contentEl.textContent).toContain(text);
+    for (const forbidden of [
+      "Accept candidate",
+      "Edit candidate",
+      "Save candidate",
+    ])
+      expect(view.contentEl.textContent).not.toContain(forbidden);
+    const live = view.contentEl.querySelector(".c2v-provider-status");
+    expect(live?.getAttribute("role")).toBe("status");
+    expect(live?.getAttribute("aria-live")).toBe("polite");
+    expect(live?.getAttribute("aria-atomic")).toBe("true");
+    credentialState = "missing";
+    stateObserver?.();
+    const missingLive = view.contentEl.querySelector(".c2v-provider-status");
+    expect(missingLive).toBe(live);
+    expect(view.contentEl.textContent).toContain(
+      "Save a provider API key in macOS Keychain before sending.",
+    );
+    expect(
+      view.contentEl.querySelector<HTMLButtonElement>(".c2v-provider-distill")
+        ?.disabled,
+    ).toBe(true);
+    stateObserver?.();
+    expect(view.contentEl.querySelector(".c2v-provider-status")).toBe(live);
+    credentialState = "configured";
+    providerSettingsStatusCode = "PROVIDER_SETTINGS_SAVING";
+    stateObserver?.();
+    expect(view.contentEl.querySelector(".c2v-provider-status")).toBe(live);
+    expect(view.contentEl.textContent).toContain(
+      "Provider settings are being saved.",
+    );
+    expect(
+      view.contentEl.querySelector<HTMLButtonElement>(".c2v-provider-distill")
+        ?.disabled,
+    ).toBe(true);
+    providerSettingsStatusCode = "PROVIDER_SETTINGS_SAVE_FAILED";
+    stateObserver?.();
+    expect(view.contentEl.textContent).toContain(
+      "Provider settings could not be saved.",
+    );
+    providerSettingsStatusCode = undefined;
+    stateObserver?.();
+    view.contentEl
+      .querySelector<HTMLButtonElement>(".c2v-provider-distill")
+      ?.click();
+    await flush();
+    expect(transport).toHaveBeenCalledOnce();
+    expect(view.contentEl.textContent).toContain(
+      "The provider request failed before a valid response was received.",
+    );
+    await view.onClose();
+  });
+
+  it.each(["saving", "failed"] as const)(
+    "does not observe Keychain status when identity is %s",
+    async (identityState) => {
+      const controller = new ImportController(() =>
+        Promise.resolve(importResult([])),
+      );
+      const observe = vi.fn(() => ({
+        ok: true as const,
+        status: "configured" as const,
+      }));
+      const view = new Chat2VaultView(
+        {} as never,
+        controller,
+        () => 25,
+        undefined,
+        undefined,
+        {
+          current: () => ({
+            platformEligible: true,
+            unsupportedFutureSettings: false,
+            identityState,
+            credentialState: "unknown",
+            credentialOperationInProgress: false,
+            providerSettingsSaving: false,
+            cloudDisclosureAccepted: false,
+            providerSettingsGeneration: 0,
+            providerSaveGeneration: 0,
+            credentialGeneration: 0,
+          }),
+          readCredential: () => ({
+            ok: false,
+            code: "KEYCHAIN_STATUS_UNKNOWN",
+          }),
+          transport: () =>
+            Promise.resolve({ ok: false, code: "PROVIDER_NETWORK_FAILED" }),
+          observeCredentialOnViewOpen: observe,
+          registerInvalidator: () => () => undefined,
+        },
+      );
+      await view.onOpen();
+      expect(observe).not.toHaveBeenCalled();
+      await view.onClose();
+    },
+  );
+
   it("renders the accessible manual distillation round trip as inert read-only UI", async () => {
     const item: CanonicalConversation = {
       schemaVersion: 1,
@@ -227,6 +407,36 @@ describe("preview view", () => {
       () => 25,
       undefined,
       { writeClipboard: copied },
+      {
+        current: () => ({
+          platformEligible: true,
+          unsupportedFutureSettings: false,
+          identityState: "authoritative",
+          credentialState: "configured",
+          credentialOperationInProgress: false,
+          providerSettingsSaving: false,
+          cloudDisclosureAccepted: true,
+          providerSettingsGeneration: 1,
+          providerSaveGeneration: 1,
+          credentialGeneration: 1,
+          config: {
+            endpoint: "https://m05.invalid/v1/chat/completions",
+            hostname: "m05.invalid",
+            port: 443,
+            model: "synthetic-m05-model",
+            timeoutMs: 60_000,
+            maxOutputTokens: 4_096,
+          },
+        }),
+        readCredential: () => ({ ok: true, secret: "synthetic-key" }),
+        transport: () =>
+          Promise.resolve({ ok: false, code: "PROVIDER_NETWORK_FAILED" }),
+        observeCredentialOnViewOpen: () => ({
+          ok: true,
+          status: "configured",
+        }),
+        registerInvalidator: () => () => undefined,
+      },
     );
     document.body.append(view.contentEl);
     await view.onOpen();
@@ -290,18 +500,22 @@ describe("preview view", () => {
     validate?.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const panel = view.contentEl.querySelector(".c2v-distillation");
+    const panel = view.contentEl.querySelector(".c2v-detail");
     const keyboardOrder = [
       "Prepare manual prompt",
       "Copy prompt",
       "Paste strict JSON",
       "Validate result",
+      "Distill with provider",
       "Candidates per page",
-      "Previous",
-      "Next",
+      "Next page",
     ];
     expect(
-      [...panel!.querySelectorAll("button, textarea, select")].map(
+      [
+        ...panel!.querySelectorAll(
+          "button:not(:disabled), textarea:not(:disabled), select:not(:disabled)",
+        ),
+      ].map(
         (element) =>
           element.getAttribute("aria-label") ?? element.textContent.trim(),
       ),
@@ -403,6 +617,168 @@ describe("preview view", () => {
     expect(view.contentEl.textContent).toContain("Race winner");
     await view.onClose();
   });
+
+  it.each(["Prepare", "Validate"] as const)(
+    "uses one preview winner and synchronously clears provider candidates on accepted %s entry",
+    async (manualKind) => {
+      const item = manualConversation();
+      const built = buildDistillationRequest(item);
+      if (!built.ok) throw new Error("Synthetic request failed");
+      const controller = new ImportController(() =>
+        Promise.resolve(importResult([item])),
+      );
+      const providerCandidate: PreviewCandidate = {
+        id: "provider-candidate",
+        candidateFingerprint: `sha256:${"4".repeat(64)}`,
+        type: "insight",
+        title: "Provider winner",
+        summary: "Provider summary",
+        body: "Provider body",
+        status: "proposed",
+        confidence: "high",
+        sourceRefs: [
+          {
+            provider: "unknown",
+            conversationFingerprint: built.request.conversationFingerprint,
+            messageFingerprints: [built.request.messages[0]!.fingerprint],
+          },
+        ],
+        suggestedLinks: [],
+        suggestedTags: [],
+      };
+      let failProviderTransport = false;
+      const view = new Chat2VaultView(
+        {} as never,
+        controller,
+        () => 25,
+        undefined,
+        { writeClipboard: () => Promise.resolve() },
+        {
+          current: () => ({
+            platformEligible: true,
+            unsupportedFutureSettings: false,
+            identityState: "authoritative",
+            credentialState: "configured",
+            credentialOperationInProgress: false,
+            providerSettingsSaving: false,
+            cloudDisclosureAccepted: true,
+            providerSettingsGeneration: 1,
+            providerSaveGeneration: 1,
+            credentialGeneration: 1,
+            config: {
+              endpoint: "https://m05.invalid/v1/chat/completions",
+              hostname: "m05.invalid",
+              port: 443,
+              model: "synthetic-m05-model",
+              timeoutMs: 60_000,
+              maxOutputTokens: 4_096,
+            },
+          }),
+          readCredential: () => ({ ok: true, secret: "synthetic-key" }),
+          transport: () =>
+            failProviderTransport
+              ? Promise.resolve({
+                  ok: false as const,
+                  code: "PROVIDER_NETWORK_FAILED" as const,
+                })
+              : Promise.resolve({
+                  ok: true as const,
+                  status: 200,
+                  body: new TextEncoder().encode(
+                    JSON.stringify({
+                      choices: [{ message: { content: "synthetic-result" } }],
+                    }),
+                  ),
+                }),
+          validateResult: () => ({
+            ok: true,
+            candidates: [providerCandidate],
+          }),
+          observeCredentialOnViewOpen: () => ({
+            ok: true,
+            status: "configured",
+          }),
+          registerInvalidator: () => () => undefined,
+        },
+      );
+      document.body.append(view.contentEl);
+      await view.onOpen();
+      await controller.import([
+        {
+          name: "synthetic.json",
+          size: 1,
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)),
+        },
+      ]);
+      view.contentEl.querySelector<HTMLButtonElement>(".c2v-row")?.click();
+      view.contentEl
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Prepare manual prompt"]',
+        )
+        ?.click();
+      await flush();
+      const textarea = view.contentEl.querySelector<HTMLTextAreaElement>(
+        '[aria-label="Paste strict JSON"]',
+      )!;
+      textarea.value = JSON.stringify({
+        schemaVersion: 1,
+        contractVersion: "m04-manual-v1",
+        requestId: built.request.requestId,
+        conversationFingerprint: built.request.conversationFingerprint,
+        candidates: [
+          {
+            type: "insight",
+            title: "Manual winner",
+            summary: "Manual summary",
+            body: "Manual body",
+            confidence: "high",
+            sourceMessageFingerprints: [built.request.messages[0]!.fingerprint],
+            suggestedLinks: [],
+            suggestedTags: [],
+          },
+        ],
+      });
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      view.contentEl
+        .querySelector<HTMLButtonElement>('[aria-label="Validate result"]')
+        ?.click();
+      await flush();
+      expect(view.contentEl.textContent).toContain("Manual winner");
+
+      view.contentEl
+        .querySelector<HTMLButtonElement>(".c2v-provider-distill")
+        ?.click();
+      await flush();
+      expect(view.contentEl.textContent).toContain("Provider winner");
+      expect(view.contentEl.textContent).not.toContain("Manual winner");
+      expect(
+        view.contentEl.querySelectorAll(".c2v-candidate-preview"),
+      ).toHaveLength(1);
+      failProviderTransport = true;
+      view.contentEl
+        .querySelector<HTMLButtonElement>(".c2v-provider-distill")
+        ?.click();
+      await flush();
+      expect(view.contentEl.textContent).toContain("Provider winner");
+      expect(view.contentEl.textContent).toContain(
+        "The provider request failed before a valid response was received.",
+      );
+
+      if (manualKind === "Prepare")
+        view.contentEl
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Prepare manual prompt"]',
+          )
+          ?.click();
+      else
+        view.contentEl
+          .querySelector<HTMLButtonElement>('[aria-label="Validate result"]')
+          ?.click();
+      expect(view.contentEl.textContent).not.toContain("Provider winner");
+      await flush();
+      await view.onClose();
+    },
+  );
 
   it("does not repopulate a closed view when an unsettled Copy finishes stale", async () => {
     let resolveCopy!: () => void;

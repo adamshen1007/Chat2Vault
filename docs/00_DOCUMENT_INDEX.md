@@ -1,7 +1,7 @@
 # Chat2Vault Document Index
 
-Version: 0.19
-Status: M03 and M04 complete and merged; M05 v0.8 specification remediation awaiting exact independent re-review
+Version: 0.20
+Status: M03 and M04 complete and merged; M05 implementation/runtime candidate awaiting independent commit-readiness review
 Working name: Chat2Vault
 
 | Document                                   | Purpose                                                                                        |
@@ -27,8 +27,11 @@ Working name: Chat2Vault
 | `15_M04_IMPLEMENTATION_NOTES.md`           | M04 candidate implementation, automated evidence, AC ledger, and remaining runtime/review gate |
 | `16_M04_RUNTIME_GATE_REPORT.md`            | M04 two-row macOS runtime qualification, attributed evidence, and runtime decision             |
 | `17_M04_CLOSURE_REPORT.md`                 | Final independent verdict, publication chronology, post-merge verification, and M04 closure    |
-| `M05_SPEC.md`                              | Candidate M05 OpenAI-compatible cloud adapter specification and acceptance contract            |
+| `M05_SPEC.md`                              | Independently approved byte-frozen M05 OpenAI-compatible cloud adapter specification           |
 | `M05_SPEC_REVIEW_LEDGER.md`                | M05 v1–v7 independent specification findings and exact remediation lineage                     |
+| `M05_FILE_KEYCHAIN_AMENDMENT.md`           | Approved file-Keychain selection amendment for the M05 native credential boundary              |
+| `18_M05_IMPLEMENTATION_NOTES.md`           | M05 implementation architecture, inventory, acceptance mapping, evidence, and readiness state  |
+| `19_M05_RUNTIME_GATE_REPORT.md`            | Exact Obsidian 1.7.4/current-stable two-row M05 macOS runtime qualification                    |
 | `../prompts/CODEX_M01_EXECUTION_PROMPT.md` | Consolidated Codex implementation prompt for Milestone 01                                      |
 | `../AGENTS.md`                             | Persistent repository governance for Codex/agents                                              |
 
@@ -74,4 +77,16 @@ For Milestone 04, the authority order is:
 
 The exact v0.6 specification received `GO — M04 IMPLEMENTATION AUTHORIZED`, and the Product Owner explicitly authorized implementation. `docs/M04_SPEC.md` must remain byte-identical. The two-row runtime evidence and v8 whole-candidate packet received exact `GO — M04 COMMIT READY` on 2026-08-28. The Product Owner then separately authorized publication; pull request #3 merged the candidate into `main` at `09ecdd0c250e44060e597fd2777d52ae03e5fac3`. Deployment, release, and M05 remain outside M04 closure.
 
-For Milestone 05, `docs/M05_SPEC.md` is a candidate only. Independent exact-byte approval uses `GO — M05 SPECIFICATION APPROVED` and does not authorize implementation. It becomes implementation authority only after that approval and a subsequent, separately attributable Product Owner action containing `M05 IMPLEMENTATION AUTHORIZED`. Until both occur, M05 implementation is NO-GO.
+For Milestone 05, the authority order is:
+
+1. `AGENTS.md`
+2. exact byte-frozen `docs/M05_FILE_KEYCHAIN_AMENDMENT.md` (SHA-256 `0f3f24e43343705ec411730453b2e92acab75c32cb283d5737fc441163b4ba78`) for the explicitly superseded Keychain clauses
+3. exact byte-frozen `docs/M05_SPEC.md` v0.8 (SHA-256 `895504880bc369bfbe64d60f60f675064f538458a563b2476fb9cf2e9c4876fd`)
+4. M04 closure baseline `2ac8f194adeca6de5cf2c227ca8213013455573e`
+5. `docs/03_ARCHITECTURE.md`
+6. `docs/04_KNOWLEDGE_SCHEMA.md`
+7. `docs/01_PRODUCT_BRIEF.md`
+8. `docs/05_ROADMAP.md`
+9. `docs/06_OPEN_SOURCE_RELEASE_STRATEGY.md`
+
+The exact M05 specification and file-Keychain amendment were independently approved, and the Product Owner separately supplied `M05 IMPLEMENTATION AUTHORIZED`. The uncommitted implementation passed its exact two-host runtime gate. Commit readiness remains NO-GO until an independent whole-candidate packet returns exactly `GO — M05 COMMIT READY`; publication, release, deployment, provider spend, Community submission, and M06 remain separate decisions.
