@@ -283,14 +283,283 @@ function mutationAccess(node) {
 
 function scanKnowledgeMutations(record) {
   const name = basename(record.file);
-  const authorityAliases = new Set(["io", "vault", "adapter", "fileManager"]);
-  const authorityReceiver = (node) => {
-    const text = node.getText(record.source);
+  const at = (node) =>
+    record.source.getLineAndCharacterOfPosition(node.getStart(record.source))
+      .line + 1;
+  const isKnowledgeAdapter = record.file === knowledgeAdapter.file;
+  const rawIdentifiers = new Set();
+  const contextIdentifiers = new Set();
+  const containerIdentifiers = new Set();
+  const rawMembers = new Set();
+  const contextMembers = new Set();
+  const topLevelFunctions = new Map(
+    record.source.statements
+      .filter(
+        (statement) =>
+          ts.isFunctionDeclaration(statement) && statement.name !== undefined,
+      )
+      .map((statement) => [statement.name.text, statement]),
+  );
+  if (!isKnowledgeAdapter) rawIdentifiers.add("adapter");
+
+  const keyOf = (node) => {
+    if (
+      node !== undefined &&
+      (ts.isIdentifier(node) ||
+        ts.isPrivateIdentifier(node) ||
+        ts.isStringLiteral(node) ||
+        ts.isNoSubstitutionTemplateLiteral(node))
+    )
+      return node.text;
+    return undefined;
+  };
+  const unwrap = (node) => {
+    let current = node;
+    while (
+      ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isTypeAssertionExpression(current) ||
+      ts.isNonNullExpression(current) ||
+      ts.isSatisfiesExpression(current)
+    )
+      current = current.expression;
+    return current;
+  };
+  const seed = (node) => {
+    if (!ts.isIdentifier(node.name)) return;
+    const type = node.type?.getText(record.source);
+    if (
+      type === "SourceVaultIO" ||
+      /^(?:DataAdapter|Vault|FileManager)$/u.test(type ?? "")
+    )
+      rawIdentifiers.add(node.name.text);
+    if (type === "AdapterContext") contextIdentifiers.add(node.name.text);
+    if (
+      !isKnowledgeAdapter &&
+      ["io", "vault", "adapter", "fileManager"].includes(node.name.text)
+    )
+      rawIdentifiers.add(node.name.text);
+  };
+  const seedVisit = (node) => {
+    if (ts.isParameter(node)) seed(node);
+    if (ts.isPropertyDeclaration(node) && node.type !== undefined) {
+      const key = keyOf(node.name);
+      if (
+        key !== undefined &&
+        node.type.getText(record.source) === "AdapterContext"
+      )
+        contextMembers.add(key);
+      if (
+        key !== undefined &&
+        /^(?:SourceVaultIO|DataAdapter|Vault|FileManager)$/u.test(
+          node.type.getText(record.source),
+        )
+      )
+        rawMembers.add(key);
+    }
+    ts.forEachChild(node, seedVisit);
+  };
+  seedVisit(record.source);
+
+  const kindOf = (input) => {
+    const node = unwrap(input);
+    if (ts.isIdentifier(node)) {
+      if (rawIdentifiers.has(node.text)) return "raw";
+      if (contextIdentifiers.has(node.text)) return "context";
+      if (containerIdentifiers.has(node.text)) return "container";
+      return undefined;
+    }
+    if (ts.isPropertyAccessExpression(node)) {
+      const key = node.name.text;
+      if (rawMembers.has(key)) return "raw";
+      if (contextMembers.has(key)) return "context";
+      const receiver = kindOf(node.expression);
+      if (receiver === "context") return key === "io" ? "raw" : undefined;
+      if (receiver === "raw")
+        return ["basePath", "configDir"].includes(key) ? undefined : "raw";
+      if (receiver === "container") return "raw";
+      return undefined;
+    }
+    if (ts.isElementAccessExpression(node)) {
+      const receiver = kindOf(node.expression);
+      const key =
+        node.argumentExpression === undefined
+          ? undefined
+          : keyOf(unwrap(node.argumentExpression));
+      if (key !== undefined && rawMembers.has(key)) return "raw";
+      if (key !== undefined && contextMembers.has(key)) return "context";
+      if (receiver === "context") return key === "io" ? "raw" : undefined;
+      if (receiver === "raw" || receiver === "container") return "raw";
+      return undefined;
+    }
+    if (ts.isObjectLiteralExpression(node)) {
+      for (const property of node.properties) {
+        if (
+          ts.isPropertyAssignment(property) &&
+          kindOf(property.initializer) !== undefined
+        )
+          return "container";
+        if (
+          ts.isShorthandPropertyAssignment(property) &&
+          kindOf(property.name) !== undefined
+        )
+          return "container";
+        if (
+          ts.isSpreadAssignment(property) &&
+          kindOf(property.expression) !== undefined
+        )
+          return "container";
+      }
+      return undefined;
+    }
+    if (ts.isArrayLiteralExpression(node))
+      return node.elements.some((element) => kindOf(element) !== undefined)
+        ? "container"
+        : undefined;
+    if (ts.isConditionalExpression(node))
+      return kindOf(node.whenTrue) ?? kindOf(node.whenFalse);
+    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node))
+      return closureContainsAuthority(node) ? "container" : undefined;
+    return undefined;
+  };
+  const closureContainsAuthority = (closure) => {
+    let found = false;
+    const visit = (node) => {
+      if (found) return;
+      if (
+        ts.isPropertyAccessExpression(node) ||
+        ts.isElementAccessExpression(node)
+      ) {
+        if (kindOf(node) !== undefined) found = true;
+        return;
+      }
+      if (ts.isIdentifier(node) && kindOf(node) !== undefined) {
+        found = true;
+        return;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(closure.body);
+    return found;
+  };
+  const markIdentifier = (identifier, kind) => {
+    if (kind === "raw") rawIdentifiers.add(identifier.text);
+    else if (kind === "context") contextIdentifiers.add(identifier.text);
+    else containerIdentifiers.add(identifier.text);
+  };
+  const markBinding = (pattern, kind) => {
+    if (ts.isIdentifier(pattern)) {
+      markIdentifier(pattern, kind);
+      return;
+    }
+    if (ts.isObjectBindingPattern(pattern)) {
+      for (const element of pattern.elements) {
+        if (!ts.isIdentifier(element.name)) continue;
+        const key = keyOf(element.propertyName ?? element.name);
+        if (kind === "context") {
+          if (key === "io") markIdentifier(element.name, "raw");
+        } else markIdentifier(element.name, "raw");
+      }
+      return;
+    }
+    if (ts.isArrayBindingPattern(pattern))
+      for (const element of pattern.elements)
+        if (ts.isBindingElement(element) && ts.isIdentifier(element.name))
+          markIdentifier(element.name, "raw");
+  };
+  const memberTarget = (node, kind) => {
+    if (ts.isIdentifier(node)) {
+      markIdentifier(node, kind);
+      return;
+    }
+    if (
+      ts.isPropertyAccessExpression(node) ||
+      ts.isElementAccessExpression(node)
+    ) {
+      const key = ts.isPropertyAccessExpression(node)
+        ? node.name.text
+        : node.argumentExpression === undefined
+          ? undefined
+          : keyOf(unwrap(node.argumentExpression));
+      if (key !== undefined) {
+        if (kind === "context") contextMembers.add(key);
+        else rawMembers.add(key);
+      }
+      let root = node.expression;
+      while (
+        ts.isPropertyAccessExpression(root) ||
+        ts.isElementAccessExpression(root)
+      )
+        root = root.expression;
+      if (ts.isIdentifier(root)) containerIdentifiers.add(root.text);
+      return;
+    }
+    if (ts.isObjectLiteralExpression(node))
+      for (const property of node.properties) {
+        if (!ts.isPropertyAssignment(property)) continue;
+        memberTarget(property.initializer, "raw");
+      }
+  };
+  const exactContextConstruction = (node) => {
+    if (!isKnowledgeAdapter || !ts.isBinaryExpression(node)) return false;
+    if (
+      node.left.getText(record.source) !== "this.#context" ||
+      !ts.isObjectLiteralExpression(node.right)
+    )
+      return false;
+    const keys = node.right.properties.map((property) => keyOf(property.name));
+    let ancestor = node.parent;
+    while (ancestor !== undefined && !ts.isConstructorDeclaration(ancestor))
+      ancestor = ancestor.parent;
+    const expectedKeys = [
+      "io",
+      "native",
+      "sourceRoot",
+      "knowledgeRoot",
+      "platform",
+      "arch",
+    ];
     return (
-      authorityAliases.has(text) ||
-      /(?:^|[.#])(?:io|vault|adapter|fileManager)(?:$|\.|#|\[)/iu.test(text)
+      ancestor !== undefined &&
+      ts.isClassDeclaration(ancestor.parent) &&
+      ancestor.parent.name?.text === "ObsidianKnowledgeVaultAdapter" &&
+      JSON.stringify(keys) === JSON.stringify(expectedKeys) &&
+      node.right.properties.every(
+        (property, index) =>
+          ts.isShorthandPropertyAssignment(property) &&
+          property.name.text === expectedKeys[index],
+      )
     );
   };
+  const exactLocalAuthorityArgument = (call, index, kind) => {
+    if (!isKnowledgeAdapter || !ts.isIdentifier(call.expression)) return false;
+    const declaration = topLevelFunctions.get(call.expression.text);
+    const parameter = declaration?.parameters[index];
+    const type = parameter?.type?.getText(record.source);
+    if (kind === "context") return type === "AdapterContext";
+    return declaration?.name?.text === "nativePath" && type === "SourceVaultIO";
+  };
+  const exactVariableTransfer = (node, kind) => {
+    if (!isKnowledgeAdapter || !ts.isVariableDeclaration(node)) return false;
+    if (
+      kind === "context" &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "context" &&
+      node.initializer?.getText(record.source) === "this.#context"
+    )
+      return true;
+    return (
+      kind === "context" &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.name.getText(record.source) === "{ io, native }" &&
+      node.initializer?.getText(record.source) === "context"
+    );
+  };
+  const authorityReceiver = (node) =>
+    kindOf(node) !== undefined ||
+    /(?:^|[.#])(?:io|vault|adapter|fileManager)(?:$|\.|#|\[)/iu.test(
+      node.getText(record.source),
+    );
   const allowedCreateReference = (node, access) => {
     const call = node.parent;
     if (
@@ -314,39 +583,68 @@ function scanKnowledgeMutations(record) {
   };
   const visit = (node) => {
     if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
-      if (ts.isIdentifier(node.name)) {
-        if (authorityReceiver(node.initializer))
-          authorityAliases.add(node.name.text);
-      } else if (
-        ts.isObjectBindingPattern(node.name) &&
-        authorityReceiver(node.initializer)
-      ) {
-        for (const element of node.name.elements) {
-          const method = propertyName(
-            element.propertyName ?? element.name,
-            record.source,
+      const kind = kindOf(node.initializer);
+      if (kind !== undefined) {
+        markBinding(node.name, kind);
+        if (!exactVariableTransfer(node, kind))
+          failures.push(
+            `${name}:${String(at(node))}: knowledge transfers writer authority`,
           );
-          if (method !== undefined && forbiddenVaultMutations.has(method))
-            failures.push(`${name}: knowledge references mutation ${method}`);
-        }
+      }
+    }
+    if (ts.isPropertyDeclaration(node) && node.initializer !== undefined) {
+      const kind = kindOf(node.initializer);
+      const key = keyOf(node.name);
+      if (kind !== undefined && key !== undefined) {
+        if (kind === "context") contextMembers.add(key);
+        else rawMembers.add(key);
+        failures.push(
+          `${name}:${String(at(node))}: knowledge stores writer authority in field`,
+        );
       }
     }
     if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.EqualsToken
     ) {
-      if (ts.isIdentifier(node.left) && authorityReceiver(node.right))
-        authorityAliases.add(node.left.text);
-      if (
-        ts.isObjectLiteralExpression(node.left) &&
-        authorityReceiver(node.right)
-      ) {
-        for (const property of node.left.properties) {
-          const method = propertyName(property.name, record.source);
-          if (method !== undefined && forbiddenVaultMutations.has(method))
-            failures.push(`${name}: knowledge references mutation ${method}`);
-        }
+      const kind = kindOf(node.right);
+      if (kind !== undefined) {
+        const isContextConstruction = exactContextConstruction(node);
+        memberTarget(node.left, isContextConstruction ? "context" : kind);
+        if (!isContextConstruction)
+          failures.push(
+            `${name}:${String(at(node))}: knowledge assigns writer authority`,
+          );
       }
+    }
+    if (ts.isReturnStatement(node) && node.expression !== undefined) {
+      if (kindOf(node.expression) !== undefined)
+        failures.push(
+          `${name}:${String(at(node))}: knowledge returns writer authority`,
+        );
+    }
+    if (ts.isCallExpression(node)) {
+      node.arguments.forEach((argument, index) => {
+        const kind = kindOf(argument);
+        if (
+          kind !== undefined &&
+          !exactLocalAuthorityArgument(node, index, kind)
+        )
+          failures.push(
+            `${name}:${String(at(argument))}: knowledge passes writer authority`,
+          );
+      });
+      const access = mutationAccess(node.expression);
+      if (
+        access !== undefined &&
+        authorityReceiver(access.receiver) &&
+        (access.method === undefined ||
+          forbiddenVaultMutations.has(access.method)) &&
+        !allowedCreateReference(node.expression, access)
+      )
+        failures.push(
+          `${name}: knowledge references mutation ${access.method ?? "computed"}`,
+        );
     }
     if (
       ts.isPropertyAccessExpression(node) ||
@@ -355,6 +653,7 @@ function scanKnowledgeMutations(record) {
       const access = mutationAccess(node);
       if (
         access !== undefined &&
+        kindOf(node) !== undefined &&
         authorityReceiver(access.receiver) &&
         (access.method === undefined ||
           forbiddenVaultMutations.has(access.method)) &&
@@ -362,6 +661,55 @@ function scanKnowledgeMutations(record) {
       )
         failures.push(
           `${name}: knowledge references mutation ${access.method ?? "computed"}`,
+        );
+      if (
+        access !== undefined &&
+        kindOf(node) !== undefined &&
+        authorityReceiver(access.receiver) &&
+        access.method !== undefined &&
+        !forbiddenVaultMutations.has(access.method) &&
+        node.parent !== undefined &&
+        !(
+          ts.isCallExpression(node.parent) && node.parent.expression === node
+        ) &&
+        !(
+          (ts.isPropertyAccessExpression(node.parent) ||
+            ts.isElementAccessExpression(node.parent)) &&
+          node.parent.expression === node
+        ) &&
+        !(
+          ts.isCallExpression(node.parent) &&
+          node.parent.arguments.includes(node) &&
+          exactLocalAuthorityArgument(
+            node.parent,
+            node.parent.arguments.indexOf(node),
+            kindOf(node),
+          )
+        ) &&
+        !["basePath", "configDir"].includes(access.method)
+      )
+        failures.push(
+          `${name}:${String(at(node))}: knowledge escapes writer authority member`,
+        );
+    }
+    if (
+      (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
+      closureContainsAuthority(node) &&
+      !(
+        ts.isCallExpression(node.parent) &&
+        node.parent.arguments.includes(node) &&
+        kindOf(node) === undefined
+      )
+    ) {
+      const parent = node.parent;
+      if (
+        !ts.isVariableDeclaration(parent) &&
+        !ts.isPropertyDeclaration(parent) &&
+        !ts.isReturnStatement(parent) &&
+        !ts.isCallExpression(parent)
+      )
+        failures.push(
+          `${name}:${String(at(node))}: knowledge closure captures writer authority`,
         );
     }
     ts.forEachChild(node, visit);

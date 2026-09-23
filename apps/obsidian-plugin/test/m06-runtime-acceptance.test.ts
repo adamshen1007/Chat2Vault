@@ -19,6 +19,14 @@ const createdPaths = [
   "Knowledge/Synthetic runtime title 1--a4e2e375959f.md",
 ] as const;
 const conflictPath = "Knowledge/Synthetic runtime title 3--019816a233ca.md";
+const createdHashes = [
+  "0ec7be9d691bdf119cc77b87bd73b8c779c798371787e67b63b7f3d143b18588",
+  "4edf0cc2eced96c6015511badf3e5bc4ce8eb14313f74af0190eb4a7fc7498e7",
+] as const;
+const conflictHash =
+  "c0bc8a1b49d08ce156003b729b8ee9eb6502dc2ab31b2c313c94da3a36c6881c";
+const sourceHash =
+  "0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c";
 
 function scenario(id: (typeof scenarioIds)[number]) {
   return {
@@ -37,8 +45,8 @@ function validEvidence() {
     observations: scenarios,
     source: {
       path: "Sources/synthetic-source.md",
-      beforeHash: "a".repeat(64),
-      afterHash: "a".repeat(64),
+      beforeHash: sourceHash,
+      afterHash: sourceHash,
       unchanged: true,
     },
     mutationAttempts: [
@@ -116,17 +124,17 @@ function validEvidence() {
       },
     ],
     knowledge: [
-      ...createdPaths.map((path) => ({
+      ...createdPaths.map((path, index) => ({
         path,
         status: "created",
-        sha256: "b".repeat(64),
+        sha256: createdHashes[index] ?? "",
       })),
-      ...createdPaths.map((path) => ({
+      ...createdPaths.map((path, index) => ({
         path,
         status: "identical-no-op",
-        sha256: "b".repeat(64),
+        sha256: createdHashes[index] ?? "",
       })),
-      { path: conflictPath, status: "conflict", sha256: "c".repeat(64) },
+      { path: conflictPath, status: "conflict", sha256: conflictHash },
     ],
     counts: {
       candidates: 3,
@@ -145,6 +153,13 @@ function required<T>(values: T[], index: number): T {
   if (value === undefined)
     throw new Error(`missing fixture entry ${String(index)}`);
   return value;
+}
+
+function swap(values: unknown[], left: number, right: number): void {
+  [values[left], values[right]] = [
+    required(values, right),
+    required(values, left),
+  ];
 }
 
 type Validator = (value: unknown) => string[];
@@ -272,6 +287,71 @@ describe("M06 runtime evidence acceptance", () => {
       },
     ],
   ])("rejects %s ledger evidence", async (_name, mutate) => {
+    await expectRejected(mutate);
+  });
+
+  it.each([
+    [
+      "wrong path",
+      (value: ReturnType<typeof validEvidence>) => {
+        const path = "Knowledge/wrong-but-relative.md";
+        required(value.knowledge, 0).path = path;
+        required(value.knowledge, 2).path = path;
+        required(value.mutationAttempts, 6).path = path;
+        required(value.mutationAttempts, 7).path = path;
+      },
+    ],
+    [
+      "duplicate path",
+      (value: ReturnType<typeof validEvidence>) => {
+        const first = required(value.knowledge, 0);
+        const firstNoOp = required(value.knowledge, 2);
+        required(value.knowledge, 1).path = first.path;
+        required(value.knowledge, 1).sha256 = first.sha256;
+        required(value.knowledge, 3).path = firstNoOp.path;
+        required(value.knowledge, 3).sha256 = firstNoOp.sha256;
+        required(value.mutationAttempts, 8).path = first.path;
+        required(value.mutationAttempts, 9).path = first.path;
+      },
+    ],
+    [
+      "swapped path",
+      (value: ReturnType<typeof validEvidence>) => {
+        swap(value.knowledge, 0, 1);
+        swap(value.knowledge, 2, 3);
+        swap(value.mutationAttempts, 6, 8);
+        swap(value.mutationAttempts, 7, 9);
+      },
+    ],
+    [
+      "wrong hash",
+      (value: ReturnType<typeof validEvidence>) => {
+        const hash = "d".repeat(64);
+        required(value.knowledge, 0).sha256 = hash;
+        required(value.knowledge, 2).sha256 = hash;
+      },
+    ],
+    [
+      "status path mismatch",
+      (value: ReturnType<typeof validEvidence>) => {
+        const created = required(value.knowledge, 0);
+        const noOp = required(value.knowledge, 2);
+        const conflict = required(value.knowledge, 4);
+        const oldPath = created.path;
+        const oldHash = created.sha256;
+        created.path = conflict.path;
+        created.sha256 = conflict.sha256;
+        noOp.path = conflict.path;
+        noOp.sha256 = conflict.sha256;
+        conflict.path = oldPath;
+        conflict.sha256 = oldHash;
+        required(value.mutationAttempts, 6).path = created.path;
+        required(value.mutationAttempts, 7).path = created.path;
+        required(value.mutationAttempts, 10).path = conflict.path;
+        required(value.mutationAttempts, 11).path = conflict.path;
+      },
+    ],
+  ])("rejects %s knowledge inventory", async (_name, mutate) => {
     await expectRejected(mutate);
   });
 });

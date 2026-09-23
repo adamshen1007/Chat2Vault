@@ -320,6 +320,19 @@ describe("M06 capability and privacy boundary", () => {
     expect(runner).toContain("compareM05RuntimeArtifacts");
     expect(runner).not.toContain("m06ArtifactComparisonFunction");
     expect(runner).not.toContain("providerTransport: {}");
+    const preFixtureSettle = runner.indexOf(
+      'enablePlugin("chat-to-vault");await new Promise((resolve)=>setTimeout(resolve,3000))',
+    );
+    const interception = runner.indexOf("plugin.installM06MutationLedger()");
+    const fixtureSetup = runner.indexOf("plugin.prepareM06RuntimeVault()");
+    const viewConstruction = runner.indexOf(
+      "let runtimeLeaf=",
+      fixtureSetup + 1,
+    );
+    expect(preFixtureSettle).toBeGreaterThan(-1);
+    expect(interception).toBeGreaterThan(preFixtureSettle);
+    expect(fixtureSetup).toBeGreaterThan(interception);
+    expect(viewConstruction).toBeGreaterThan(fixtureSetup);
   });
 
   it("derives one complete mutation authority from the installed Obsidian API", () => {
@@ -422,6 +435,66 @@ describe("M06 capability and privacy boundary", () => {
     await writeFile(
       fixture,
       `export function adversary(io: any, adapter: any, sourceFile: any, sourcePath: string, target: string, original: Uint8Array, bytes: Uint8Array, method: string) { ${statement}; }`,
+      "utf8",
+    );
+    try {
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [checker, "--adversarial-file", fixture],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [
+      "renamed nested container",
+      "const bucket = { outer: { disk: io } }; bucket.outer.disk.write(sourcePath, original)",
+    ],
+    [
+      "whole authority array",
+      "const bucket = [io]; bucket[0].write(sourcePath, original)",
+    ],
+    [
+      "public class field",
+      "class Box { disk = io; mutate() { this.disk.write(sourcePath, original); } } new Box().mutate()",
+    ],
+    [
+      "private class field",
+      "class Box { #disk = io; mutate() { this.#disk.write(sourcePath, original); } } new Box().mutate()",
+    ],
+    [
+      "constructor field assignment",
+      "class Box { disk: any; constructor() { this.disk = io; } mutate() { this.disk.write(sourcePath, original); } } new Box().mutate()",
+    ],
+    ["returned authority", "return io"],
+    ["passed authority", "sink(io)"],
+    [
+      "closure authority",
+      "const reveal = () => io; reveal().write(sourcePath, original)",
+    ],
+    [
+      "destructured container",
+      "const bucket = { disk: io }; const { disk: renamed } = bucket; renamed.write(sourcePath, original)",
+    ],
+    [
+      "optional computed chained read",
+      'const bucket = { disk: io }; bucket?.["disk"]?.write(sourcePath, original)',
+    ],
+  ])("rejects adversarial %s transfer", async (_name, statement) => {
+    const directory = await mkdtemp(join(tmpdir(), "c2v-m06-authority-"));
+    const fixture = join(directory, "knowledge-authority-adversary.ts");
+    await writeFile(
+      fixture,
+      `export function adversary(io: any, sourcePath: string, original: Uint8Array, sink: (value: any) => unknown) { ${statement}; }`,
       "utf8",
     );
     try {

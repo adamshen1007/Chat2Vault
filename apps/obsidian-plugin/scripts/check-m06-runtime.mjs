@@ -200,12 +200,12 @@ function buildDriver(source, row) {
     );
   driver = driver.replace(
     evidenceCall,
-    "await new Promise((resolve)=>setTimeout(resolve,1500));const evidence=await plugin.runM06RuntimeScenarios();return{",
+    "await new Promise((resolve)=>setTimeout(resolve,3000));const evidence=await plugin.runM06RuntimeScenarios();return{",
   );
   driver = replaceOnce(
     driver,
     'await app.plugins.enablePlugin("chat-to-vault");let runtimeLeaf=',
-    'await app.plugins.enablePlugin("chat-to-vault");const plugin=app.plugins.plugins["chat-to-vault"];plugin.installM06MutationLedger();await plugin.prepareM06RuntimeVault();let runtimeLeaf=',
+    'await app.plugins.enablePlugin("chat-to-vault");await new Promise((resolve)=>setTimeout(resolve,3000));const plugin=app.plugins.plugins["chat-to-vault"];plugin.installM06MutationLedger();await plugin.prepareM06RuntimeVault();let runtimeLeaf=',
     "M06 interception and fixture setup before view construction",
   );
   driver = replaceOnce(

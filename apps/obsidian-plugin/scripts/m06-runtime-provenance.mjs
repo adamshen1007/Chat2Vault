@@ -12,6 +12,37 @@ export const M06_RUNTIME_SCENARIO_IDS = Object.freeze([
   "source-note-unchanged",
   "provider-not-called",
 ]);
+export const M06_EXPECTED_SOURCE = Object.freeze({
+  path: "Sources/synthetic-source.md",
+  sha256: "0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c",
+});
+export const M06_EXPECTED_KNOWLEDGE = Object.freeze([
+  Object.freeze({
+    path: "Knowledge/Synthetic edited runtime title--c9ac8ed3a692.md",
+    status: "created",
+    sha256: "0ec7be9d691bdf119cc77b87bd73b8c779c798371787e67b63b7f3d143b18588",
+  }),
+  Object.freeze({
+    path: "Knowledge/Synthetic runtime title 1--a4e2e375959f.md",
+    status: "created",
+    sha256: "4edf0cc2eced96c6015511badf3e5bc4ce8eb14313f74af0190eb4a7fc7498e7",
+  }),
+  Object.freeze({
+    path: "Knowledge/Synthetic edited runtime title--c9ac8ed3a692.md",
+    status: "identical-no-op",
+    sha256: "0ec7be9d691bdf119cc77b87bd73b8c779c798371787e67b63b7f3d143b18588",
+  }),
+  Object.freeze({
+    path: "Knowledge/Synthetic runtime title 1--a4e2e375959f.md",
+    status: "identical-no-op",
+    sha256: "4edf0cc2eced96c6015511badf3e5bc4ce8eb14313f74af0190eb4a7fc7498e7",
+  }),
+  Object.freeze({
+    path: "Knowledge/Synthetic runtime title 3--019816a233ca.md",
+    status: "conflict",
+    sha256: "c0bc8a1b49d08ce156003b729b8ee9eb6502dc2ab31b2c313c94da3a36c6881c",
+  }),
+]);
 
 export const MINIMUM_OFFICIAL_DMG_URL =
   "https://github.com/obsidianmd/obsidian-releases/releases/download/v1.7.4/Obsidian-1.7.4.dmg";
@@ -134,14 +165,10 @@ function relativePath(value) {
   );
 }
 
-function expectedMutationAttempts(evidence) {
-  const created = evidence?.knowledge?.filter(
-    ({ status }) => status === "created",
-  );
-  const conflicts = evidence?.knowledge?.filter(
-    ({ status }) => status === "conflict",
-  );
-  if (created?.length !== 2 || conflicts?.length !== 1) return undefined;
+function expectedMutationAttempts() {
+  const firstPath = M06_EXPECTED_KNOWLEDGE[0].path;
+  const secondPath = M06_EXPECTED_KNOWLEDGE[1].path;
+  const conflictPath = M06_EXPECTED_KNOWLEDGE[4].path;
   return [
     {
       surface: "vault",
@@ -174,18 +201,18 @@ function expectedMutationAttempts(evidence) {
     {
       surface: "vault",
       method: "create",
-      path: "Sources/synthetic-source.md",
+      path: M06_EXPECTED_SOURCE.path,
       phase: "fixture-setup",
       blocked: false,
     },
     {
       surface: "adapter",
       method: "write",
-      path: "Sources/synthetic-source.md",
+      path: M06_EXPECTED_SOURCE.path,
       phase: "fixture-setup",
       blocked: false,
     },
-    ...created.flatMap(({ path }) => [
+    ...[firstPath, secondPath].flatMap((path) => [
       {
         surface: "vault",
         method: "create",
@@ -204,14 +231,14 @@ function expectedMutationAttempts(evidence) {
     {
       surface: "vault",
       method: "create",
-      path: conflicts[0].path,
+      path: conflictPath,
       phase: "conflict-fixture",
       blocked: false,
     },
     {
       surface: "adapter",
       method: "write",
-      path: conflicts[0].path,
+      path: conflictPath,
       phase: "conflict-fixture",
       blocked: false,
     },
@@ -233,9 +260,8 @@ export function validateM06RuntimeEvidence(evidence) {
   )
     failures.push("scenario registry, order, uniqueness, or counters mismatch");
 
-  const expectedAttempts = expectedMutationAttempts(evidence);
+  const expectedAttempts = expectedMutationAttempts();
   if (
-    expectedAttempts === undefined ||
     !Array.isArray(evidence?.mutationAttempts) ||
     canonicalJson(evidence.mutationAttempts) !== canonicalJson(expectedAttempts)
   )
@@ -244,27 +270,19 @@ export function validateM06RuntimeEvidence(evidence) {
   const knowledge = evidence?.knowledge;
   if (
     !Array.isArray(knowledge) ||
-    knowledge.length !== 5 ||
+    canonicalJson(knowledge) !== canonicalJson(M06_EXPECTED_KNOWLEDGE) ||
+    new Set(knowledge.map(({ path }) => path)).size !== 3 ||
     knowledge.some(
       ({ path, sha256 }) => !relativePath(path) || !SHA256.test(sha256 ?? ""),
-    ) ||
-    knowledge[0]?.status !== "created" ||
-    knowledge[1]?.status !== "created" ||
-    knowledge[2]?.status !== "identical-no-op" ||
-    knowledge[3]?.status !== "identical-no-op" ||
-    knowledge[4]?.status !== "conflict" ||
-    knowledge[0]?.path !== knowledge[2]?.path ||
-    knowledge[0]?.sha256 !== knowledge[2]?.sha256 ||
-    knowledge[1]?.path !== knowledge[3]?.path ||
-    knowledge[1]?.sha256 !== knowledge[3]?.sha256
+    )
   )
     failures.push("knowledge artifact inventory mismatch");
 
   if (
-    evidence?.source?.path !== "Sources/synthetic-source.md" ||
+    evidence?.source?.path !== M06_EXPECTED_SOURCE.path ||
     evidence.source.unchanged !== true ||
-    !SHA256.test(evidence.source.beforeHash ?? "") ||
-    evidence.source.beforeHash !== evidence.source.afterHash
+    evidence.source.beforeHash !== M06_EXPECTED_SOURCE.sha256 ||
+    evidence.source.afterHash !== M06_EXPECTED_SOURCE.sha256
   )
     failures.push("source identity mismatch");
 

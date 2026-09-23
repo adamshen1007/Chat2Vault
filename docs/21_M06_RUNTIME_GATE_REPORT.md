@@ -1,6 +1,6 @@
 # Milestone 06 Runtime Gate Report
 
-Version: 0.3-second-remediation-candidate
+Version: 0.4-third-remediation-candidate
 
 Date: 2026-09-23
 
@@ -15,7 +15,8 @@ This report records the remediated M06 capability boundary and two-row macOS x86
 - Task 7 base: `eb625490e48fca996d5b64bf8ef9f32fec985f42`
 - Reviewed Task 7 commit/tree: `e585939e494cbdb5d8fbef536c5446c70615062e` / `e02e2684754d40f04b22f56da4993186ef57aace`
 - First remediation commit/tree: `ae80eb96ebc44b63010ad7a2bfb7d11d1822c5fa` / `d94265899baa290da81ab32bb1645dd280cb3739`
-- Second remediation commit/tree: recorded in the ignored Task 7 execution report after commit; a tracked file cannot embed its own commit hash
+- Second remediation commit/tree: `7ffbe404b3fa8649412c531ab0efab16fade8ba5` / `a0c4339dfb6838c629c2a0dfee8632abe57df061`
+- Third remediation commit/tree: recorded in the ignored Task 7 execution report after commit; a tracked file cannot embed its own commit hash
 - Upstream: none configured
 - Host: macOS 15.7.9 (build 24G830), x86_64
 - Development runtime: Node.js 24.16.0; pnpm 11.7.0
@@ -36,11 +37,13 @@ The aggregate `check:plugin` chain now retains every prior gate:
 4. M05 production boundaries and the SHA-per-input/provider-output-contribution runtime comparator;
 5. M06 capability, mutation, privacy, and artifact checks.
 
-The M06 checker parses TypeScript structure rather than comment substrings. It enforces the exact seven provider service keys and exact five knowledge adapter capabilities. Knowledge code cannot import provider/network/source-mutation authority. Its mutation authority is shared with the runtime ledger and covers the complete installed Obsidian API plus prior conservative aliases: `append`, `appendBinary`, `appendFile`, `copy`, `create`, `createBinary`, `createFolder`, `delete`, `mkdir`, `modify`, `modifyBinary`, `process`, `remove`, `rename`, `rm`, `rmdir`, `trash`, `trashFile`, `trashLocal`, `trashSystem`, `truncate`, `unlink`, `write`, `writeBinary`, and `writeFile`. Any reference or escape is denied, including assignment aliases, destructuring assignment, array/object indirection, computed access, optional access, and `.bind`/`.call`/`.apply`. The sole production exception is the exact two-argument destination call `this.#context.io.create(resolvedPath, content)` inside `createKnowledgeNote`.
+The M06 checker parses TypeScript structure rather than comment substrings. It enforces the exact seven provider service keys and exact five knowledge adapter capabilities. Knowledge code cannot import provider/network/source-mutation authority. Its mutation authority is shared with the runtime ledger and covers the complete installed Obsidian API plus prior conservative aliases: `append`, `appendBinary`, `appendFile`, `copy`, `create`, `createBinary`, `createFolder`, `delete`, `mkdir`, `modify`, `modifyBinary`, `process`, `remove`, `rename`, `rm`, `rmdir`, `trash`, `trashFile`, `trashLocal`, `trashSystem`, `truncate`, `unlink`, `write`, `writeBinary`, and `writeFile`. Conservative authority taint rejects both forbidden member references and whole-authority transfer through renamed or nested objects, arrays, public/private fields, constructor assignment, destructuring, subsequent reads, function arguments/returns, closures, optional/computed chains, and `.bind`/`.call`/`.apply`. Necessary production construction and local read-only helper calls are admitted only by exact TypeScript structure; the sole mutation exception is the exact two-argument destination call `this.#context.io.create(resolvedPath, content)` inside `createKnowledgeNote`.
 
-The runtime-only ledger is installed before the production-like source and knowledge adapters can capture mutation functions. It wraps the same complete authority on both Vault and DataAdapter and records surface, method, relative path, phase, and whether an attempt was blocked. Source fixture creation is separately attributed; any later source-path attempt fails before mutation and remains in the ledger even when the caller catches the failure. The row predicate requires the exact ordered fixture/create/conflict sequence and rejects every extra mutation, including non-source relative paths and restored bytes. Adversarial tests cover assignment/destructuring/container escapes, computed and optional access, `.bind`/`.call`/`.apply`, all newly exposed APIs, and write-then-restore attempts. The synthetic source bytes flow through counted production-like I/O and match byte-for-byte before and after execution.
+The runtime-only ledger is installed before the production-like source and knowledge adapters can capture mutation functions. It wraps the same complete authority on both Vault and DataAdapter and records surface, method, relative path, phase, and whether an attempt was blocked. Source fixture creation is separately attributed; any later source-path attempt fails before mutation and remains in the ledger even when the caller catches the failure. The row predicate owns an independent fixed inventory: the exact source path/hash, five ordered knowledge records spanning exactly three unique paths with fixed hashes/statuses, and the exact 12-position method/path/phase ledger. It rejects wrong, duplicate, swapped, or status-mismatched paths and every extra mutation, including non-source relative paths and restored bytes. The synthetic source bytes flow through counted production-like I/O and match byte-for-byte before and after execution.
 
 The runtime comparator hashes every shared input and verifies the exact provider-transport output contribution. It permits only the runtime entry, network seam, Keychain seam, M06 scenario seam, and M06 mutation-ledger seam. Byte-count equality alone cannot satisfy the gate.
+
+The host harness uses bounded three-second inactive settle windows before ledger installation/fixture setup and before scenario activation. No mutation is filtered or allowlisted; interception is still installed before fixture, view, controller, or knowledge-adapter construction. This separates Obsidian's asynchronous profile initialization from the exact M06 phases while preserving fail-closed evidence for any mutation that occurs during them.
 
 ## Official host provenance
 
@@ -115,19 +118,19 @@ The retained knowledge evidence is identical in both rows:
 
 ## Verification ledger
 
-| Command                                                                                                                                                                                        | Result                                                                          |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Focused second-remediation RED run                                                                                                                                                             | RED: 3 failed suites; 23 failed and 645 passed tests, reproducing both findings |
-| `pnpm exec vitest run apps/obsidian-plugin/test/m06-boundaries.test.ts apps/obsidian-plugin/test/m06-runtime-mutation-ledger.test.ts apps/obsidian-plugin/test/m06-runtime-acceptance.test.ts` | PASS: 3 files, 40 tests                                                         |
-| `pnpm check:m06`                                                                                                                                                                               | PASS: AST boundary plus 27 M06 tests                                            |
-| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row minimum --evidence-file docs/evidence/m06-runtime-minimum.json`                                                                 | PASS: official Obsidian 1.7.4, 9/9                                              |
-| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row stable --evidence-file docs/evidence/m06-runtime-stable.json`                                                                   | PASS: official current stable 1.13.7, 9/9                                       |
-| `pnpm typecheck`                                                                                                                                                                               | PASS: core and plugin                                                           |
-| `pnpm lint`                                                                                                                                                                                    | PASS: full repository                                                           |
-| `pnpm test`                                                                                                                                                                                    | PASS: core 304 tests and plugin 668 tests                                       |
-| `pnpm build`                                                                                                                                                                                   | PASS: core and plugin; existing Security-framework deprecation warning only     |
-| Generated-bundle restore followed by `pnpm check:plugin`                                                                                                                                       | PASS: full general/M03/M04/M05/M06 clean-state chain                            |
-| `shasum -a 256 docs/evidence/m06-runtime-{minimum,stable}.json`                                                                                                                                | PASS: exact packet hashes reproduced                                            |
+| Command                                                                                                                        | Result                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| Focused third-remediation RED run                                                                                              | RED: 15 failed and 37 passed tests, reproducing both findings               |
+| `pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m06-boundaries.test.ts test/m06-runtime-acceptance.test.ts`    | PASS: 2 files, 52 tests                                                     |
+| `pnpm check:m06`                                                                                                               | PASS: AST boundary plus 37 M06 tests                                        |
+| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row minimum --evidence-file docs/evidence/m06-runtime-minimum.json` | PASS: official Obsidian 1.7.4, 9/9                                          |
+| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row stable --evidence-file docs/evidence/m06-runtime-stable.json`   | PASS: official current stable 1.13.7, 9/9                                   |
+| `pnpm typecheck`                                                                                                               | PASS: core and plugin                                                       |
+| `pnpm lint`                                                                                                                    | PASS: full repository                                                       |
+| `pnpm test`                                                                                                                    | PASS: core 304 tests and plugin 683 tests                                   |
+| `pnpm build`                                                                                                                   | PASS: core and plugin; existing Security-framework deprecation warning only |
+| Generated-bundle restore followed by `pnpm check:plugin`                                                                       | PASS: full general/M03/M04/M05/M06 clean-state chain                        |
+| `shasum -a 256 docs/evidence/m06-runtime-{minimum,stable}.json`                                                                | PASS: exact packet hashes reproduced                                        |
 
 ## Failure and remediation ledger
 
@@ -141,6 +144,9 @@ The retained knowledge evidence is identical in both rows:
 8. The second R2 review found three omitted installed mutation APIs and reference-escape/runtime-sequencing bypasses. One canonical mutation authority now drives both checker and runtime, interception precedes view/adapter construction, and the exact 12-entry sequence is required.
 9. The second R2 review found scenario identity was checked only by registry and length. The shared validator now requires ordered equality, uniqueness, exact outcome/counters, and matching observations; duplicate, substituted, reordered, and wrong-counter tests are green.
 10. The first two second-remediation minimum attempts failed correctly because exact instrumentation exposed three unrelated Obsidian configuration writes during active scenario windows. A bounded 1.5-second inactive host-settle before scenario activation separated host initialization from M06 phases; the final minimum-first and stable-second rows contain no ignored or allowlisted extra mutation.
+11. The third R2 review found that whole writer authority could still cross container/class/function boundaries. Ten RED probes reproduced nested object, array, public/private field, constructor, return/pass-through, closure, destructuring, and optional-computed chains. Conservative authority taint plus narrow structural production exceptions closes them.
+12. The third R2 review found expected paths and hashes were derived from evidence under validation. The validator now owns the fixed synthetic source and three-path knowledge inventory; five negative tests cover wrong, duplicate, swapped, wrong-hash, and status/path-mismatch evidence.
+13. Two third-remediation stable attempts failed closed on asynchronous Obsidian profile writes: `.obsidian/workspace.json` during `conflict-fixture`, then `.obsidian/core-plugins.json` during `fixture-setup`. Bounded three-second inactive settles were added before fixture setup and scenario activation, still before M06 object construction. The final minimum-first/stable-second run passed without filtering or allowlisting either path and produced the canonical packets above.
 
 No macOS TCC prompt or human-only blocker remained.
 
