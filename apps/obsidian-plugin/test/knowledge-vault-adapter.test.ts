@@ -181,6 +181,7 @@ describe("M06 knowledge vault adapter", () => {
     expect(fixture.calls.read).toEqual([
       "Sources/source.md",
       "Sources/source.md",
+      "Sources/source.md",
     ]);
     expect(fixture.calls.create).toBe(0);
   });
@@ -331,6 +332,96 @@ describe("M06 knowledge vault adapter", () => {
     expect(fixture.calls.create).toBe(0);
   });
 
+  test("fails closed when an earlier matched source mutates while a later source is processed", async () => {
+    const fixture = harness();
+    const secondConversationFingerprint = `sha256:${"e".repeat(64)}`;
+    const secondMessageFingerprint = `sha256:${"f".repeat(64)}`;
+    fixture.addSource("Sources/a.md");
+    fixture.addSource(
+      "Sources/b.md",
+      sourceNote(secondConversationFingerprint, "conversation-2"),
+    );
+    const originalRead = fixture.io.readBinary.bind(fixture.io);
+    let mutated = false;
+    fixture.io.readBinary = async (path) => {
+      const result = await originalRead(path);
+      if (path === "Sources/b.md" && !mutated) {
+        mutated = true;
+        fixture.bytes.set(
+          "Sources/a.md",
+          sourceNote(`sha256:${"0".repeat(64)}`),
+        );
+      }
+      return result;
+    };
+    const candidate = reviewedCandidate({
+      sourceRefs: [
+        {
+          provider: "chatgpt",
+          providerConversationId: "conversation-1",
+          conversationFingerprint,
+          messageFingerprints: [messageFingerprint],
+        },
+        {
+          provider: "chatgpt",
+          providerConversationId: "conversation-2",
+          conversationFingerprint: secondConversationFingerprint,
+          messageFingerprints: [secondMessageFingerprint],
+        },
+      ],
+    });
+
+    await expect(
+      fixture.adapter().resolveKnowledgeSources(candidate),
+    ).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [{ code: "KNOWLEDGE_SOURCE_STALE" }],
+    });
+    expect(fixture.calls.create).toBe(0);
+  });
+
+  test("fails closed when a non-final source-root ancestor becomes an in-vault symlink", async () => {
+    const fixture = harness();
+    fixture.entries.delete("Sources");
+    fixture.entries.set("Registry", { path: "Registry", kind: "folder" });
+    fixture.entries.set("Registry/Sources", {
+      path: "Registry/Sources",
+      kind: "folder",
+    });
+    fixture.addSource("Registry/Sources/source.md");
+    fixture.adapter = () =>
+      new ObsidianKnowledgeVaultAdapter(
+        fixture.io,
+        fixture.native,
+        () => "Registry/Sources",
+        () => "Knowledge",
+        "darwin",
+        "x64",
+      );
+    const originalRead = fixture.io.readBinary.bind(fixture.io);
+    let readCount = 0;
+    let ancestorChanged = false;
+    fixture.io.readBinary = async (path) => {
+      const result = await originalRead(path);
+      readCount += 1;
+      if (readCount === 2) ancestorChanged = true;
+      return result;
+    };
+    const originalLstat = fixture.native.lstat.bind(fixture.native);
+    fixture.native.lstat = async (path) =>
+      path === "/vault/Registry" && ancestorChanged
+        ? { kind: "present", objectKind: "symbolic-link" }
+        : originalLstat(path);
+
+    await expect(
+      fixture.adapter().resolveKnowledgeSources(reviewedCandidate()),
+    ).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [{ code: "KNOWLEDGE_SOURCE_STALE" }],
+    });
+    expect(fixture.calls.create).toBe(0);
+  });
+
   test("observes existing bytes and creates only after an absent-safe checkpoint", async () => {
     const fixture = harness();
     const path = "Knowledge/note.md";
@@ -395,6 +486,58 @@ describe("M06 knowledge vault adapter", () => {
       fixture.adapter().checkpointKnowledgeTarget("Knowledge/race.md"),
     ).resolves.toEqual({ status: "unsafe" });
     expect(fixture.calls.create).toBe(0);
+  });
+
+  test("fails closed when a non-final knowledge-root ancestor becomes an in-vault symlink", async () => {
+    const nestedFixture = () => {
+      const fixture = harness();
+      fixture.entries.delete("Knowledge");
+      fixture.entries.set("Workspace", {
+        path: "Workspace",
+        kind: "folder",
+      });
+      fixture.entries.set("Workspace/Knowledge", {
+        path: "Workspace/Knowledge",
+        kind: "folder",
+      });
+      fixture.adapter = () =>
+        new ObsidianKnowledgeVaultAdapter(
+          fixture.io,
+          fixture.native,
+          () => "Sources",
+          () => "Workspace/Knowledge",
+          "darwin",
+          "x64",
+        );
+      const originalLstat = fixture.native.lstat.bind(fixture.native);
+      let ancestorChanged = false;
+      fixture.native.lstat = async (path) => {
+        if (path === "/vault/Workspace/Knowledge/race.md") {
+          ancestorChanged = true;
+          return { kind: "absent" };
+        }
+        if (path === "/vault/Workspace" && ancestorChanged)
+          return { kind: "present", objectKind: "symbolic-link" };
+        return originalLstat(path);
+      };
+      return fixture;
+    };
+
+    const checkpoint = nestedFixture();
+    await expect(
+      checkpoint
+        .adapter()
+        .checkpointKnowledgeTarget("Workspace/Knowledge/race.md"),
+    ).resolves.toEqual({ status: "unsafe" });
+    expect(checkpoint.calls.create).toBe(0);
+
+    const create = nestedFixture();
+    await expect(
+      create
+        .adapter()
+        .createKnowledgeNote("Workspace/Knowledge/race.md", "must not write"),
+    ).rejects.toThrow();
+    expect(create.calls.create).toBe(0);
   });
 
   test("fails a read-only target observation when a collision appears during the read", async () => {

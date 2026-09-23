@@ -44,6 +44,24 @@ interface ExistingRoot {
   logicalRoot: string;
   resolvedRoot: string;
   vaultRealPath: string;
+  components: readonly RootComponent[];
+}
+
+interface RootComponent {
+  logicalPath: string;
+  resolvedPath: string;
+  realPath: string;
+}
+
+interface ObservedSourceRegistryEntry {
+  entry: SourceRegistryEntry;
+  resolvedPath: string;
+  bytes: Uint8Array;
+}
+
+interface ObservedSourceRegistry {
+  initial: readonly { path: string; kind: "folder" | "file" }[];
+  entries: readonly ObservedSourceRegistryEntry[];
 }
 
 interface AdapterContext {
@@ -146,6 +164,7 @@ async function verifyExistingRoot(
 
   const segments = logicalRoot.split("/");
   let resolvedParent = "";
+  const components: RootComponent[] = [];
   for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index];
     if (segment === undefined) return undefined;
@@ -177,13 +196,68 @@ async function verifyExistingRoot(
       physical.objectKind !== "directory"
     )
       return undefined;
+    components.push({
+      logicalPath: logical,
+      resolvedPath: match.path,
+      realPath: physical.realPath,
+    });
     resolvedParent = match.path;
   }
   return {
     logicalRoot,
     resolvedRoot: resolvedParent,
     vaultRealPath: vault.realPath,
+    components,
   };
+}
+
+async function verifyExistingRootSnapshot(
+  context: AdapterContext,
+  root: ExistingRoot,
+): Promise<boolean> {
+  const { io, native } = context;
+  if (native === undefined) return false;
+  const vault = await native.realpath(io.basePath).catch(() => ({
+    kind: "indeterminate" as const,
+  }));
+  if (vault.kind !== "resolved" || vault.realPath !== root.vaultRealPath)
+    return false;
+
+  let resolvedParent = "";
+  for (const component of root.components) {
+    const children = await io.list(resolvedParent).catch(() => undefined);
+    if (
+      children === undefined ||
+      children.some((entry) => !isM03WellFormedString(entry.path))
+    )
+      return false;
+    const collisions = children.filter(
+      (entry) =>
+        pathCollisionKey(entry.path) ===
+        pathCollisionKey(component.resolvedPath),
+    );
+    const match = collisions[0];
+    if (
+      collisions.length !== 1 ||
+      match?.kind !== "folder" ||
+      match.path !== component.resolvedPath ||
+      match.path.normalize("NFC") !== component.logicalPath
+    )
+      return false;
+    const physical = await verifyNativeComponent(
+      native,
+      root.vaultRealPath,
+      nativePath(io, match.path),
+    );
+    if (
+      physical.status !== "trusted" ||
+      physical.objectKind !== "directory" ||
+      physical.realPath !== component.realPath
+    )
+      return false;
+    resolvedParent = match.path;
+  }
+  return resolvedParent === root.resolvedRoot;
 }
 
 function trustedRegularFile(result: NativeComponentVerification): boolean {
@@ -255,7 +329,7 @@ function strictSourceRefs(
 async function discoverSourceRegistry(
   context: AdapterContext,
   root: ExistingRoot,
-): Promise<SourceRegistryEntry[] | undefined> {
+): Promise<ObservedSourceRegistry | undefined> {
   const { io, native } = context;
   if (native === undefined) return undefined;
   const initial = await io.list(root.resolvedRoot).catch(() => undefined);
@@ -288,7 +362,7 @@ async function discoverSourceRegistry(
     compareSourcePaths(left.logicalPath, right.logicalPath),
   );
 
-  const entries: SourceRegistryEntry[] = [];
+  const entries: ObservedSourceRegistryEntry[] = [];
   for (const candidate of candidates) {
     const before = await verifyNativeComponent(
       native,
@@ -350,10 +424,103 @@ async function discoverSourceRegistry(
       confirmedBytes,
       candidate.logicalPath,
     );
-    if (entry !== undefined) entries.push(entry);
+    if (entry !== undefined)
+      entries.push({
+        entry,
+        resolvedPath: candidate.resolvedPath,
+        bytes: new Uint8Array(confirmedBytes),
+      });
     else if (isChat2VaultLikeMalformed(sourceBytes)) return undefined;
   }
-  return entries;
+  return { initial, entries };
+}
+
+async function revalidateSelectedRegistry(
+  context: AdapterContext,
+  root: ExistingRoot,
+  initial: readonly { path: string; kind: "folder" | "file" }[],
+  selected: readonly ObservedSourceRegistryEntry[],
+): Promise<boolean> {
+  const { io, native } = context;
+  if (
+    native === undefined ||
+    !(await verifyExistingRootSnapshot(context, root))
+  )
+    return false;
+  const before = await io.list(root.resolvedRoot).catch(() => undefined);
+  if (
+    before === undefined ||
+    before.some(
+      (entry) =>
+        !isM03WellFormedString(entry.path) ||
+        parentPath(entry.path) !== root.resolvedRoot,
+    ) ||
+    !listingStable(initial, before)
+  )
+    return false;
+
+  const unique = new Map(
+    selected.map((source) => [source.resolvedPath, source] as const),
+  );
+  for (const source of unique.values()) {
+    const physicalBefore = await verifyNativeComponent(
+      native,
+      root.vaultRealPath,
+      nativePath(io, source.resolvedPath),
+    );
+    if (!trustedRegularFile(physicalBefore)) return false;
+    const bytes = await io
+      .readBinary(source.resolvedPath)
+      .catch(() => undefined);
+    if (bytes === undefined || !bytesEqual(bytes, source.bytes)) return false;
+    const physicalAfter = await verifyNativeComponent(
+      native,
+      root.vaultRealPath,
+      nativePath(io, source.resolvedPath),
+    );
+    if (!trustedRegularFile(physicalAfter)) return false;
+  }
+
+  const after = await io.list(root.resolvedRoot).catch(() => undefined);
+  return (
+    after !== undefined &&
+    after.every(
+      (entry) =>
+        isM03WellFormedString(entry.path) &&
+        parentPath(entry.path) === root.resolvedRoot,
+    ) &&
+    listingStable(initial, after) &&
+    (await verifyExistingRootSnapshot(context, root))
+  );
+}
+
+async function confirmTargetAbsent(
+  context: AdapterContext,
+  root: ExistingRoot,
+  normalizedPath: string,
+  resolvedPath: string,
+): Promise<boolean> {
+  if (context.native === undefined) return false;
+  const children = await context.io
+    .list(root.resolvedRoot)
+    .catch(() => undefined);
+  if (
+    children === undefined ||
+    children.some(
+      (entry) =>
+        !isM03WellFormedString(entry.path) ||
+        parentPath(entry.path) !== root.resolvedRoot,
+    ) ||
+    children.some(
+      (entry) =>
+        pathCollisionKey(entry.path) === pathCollisionKey(normalizedPath),
+    )
+  )
+    return false;
+  const physical = await context.native
+    .lstat(nativePath(context.io, resolvedPath))
+    .catch(() => ({ kind: "indeterminate" as const }));
+  return physical.kind === "absent";
 }
 
 function sourceIdentityEqual(
@@ -425,13 +592,13 @@ async function targetState(
         .lstat(nativePath(context.io, resolvedPath))
         .catch(() => ({ kind: "indeterminate" as const }));
       if (physical.kind !== "absent") return { status: "unsafe" };
-      const refreshedRoot = await verifyNativeComponent(
-        context.native,
-        root.vaultRealPath,
-        nativePath(context.io, root.resolvedRoot),
-      );
-      return refreshedRoot.status === "trusted" &&
-        refreshedRoot.objectKind === "directory"
+      return (await verifyExistingRootSnapshot(context, root)) &&
+        (await confirmTargetAbsent(
+          context,
+          root,
+          normalizedPath.sourceRoot,
+          resolvedPath,
+        ))
         ? { status: "absent", resolvedPath }
         : { status: "unsafe" };
     }
@@ -532,17 +699,23 @@ export class ObsidianKnowledgeVaultAdapter implements KnowledgeVaultAdapter {
       if (registry === undefined)
         return sourceFailure("KNOWLEDGE_SOURCE_STALE");
       const resolved: ResolvedKnowledgeSource[] = [];
+      const selected: ObservedSourceRegistryEntry[] = [];
       for (const ref of refs) {
-        const matches = registry.filter((entry) => sourceExact(entry, ref));
+        const matches = registry.entries.filter(({ entry }) =>
+          sourceExact(entry, ref),
+        );
         if (matches.length > 1)
           return sourceFailure("KNOWLEDGE_SOURCE_AMBIGUOUS");
         const match = matches[0];
         if (match === undefined)
           return sourceFailure(
-            registry.some((entry) => sourceIdentityEqual(entry, ref))
+            registry.entries.some(({ entry }) =>
+              sourceIdentityEqual(entry, ref),
+            )
               ? "KNOWLEDGE_SOURCE_STALE"
               : "KNOWLEDGE_SOURCE_UNRESOLVED",
           );
+        selected.push(match);
         resolved.push({
           provider: ref.provider,
           ...(ref.providerConversationId === undefined
@@ -550,9 +723,18 @@ export class ObsidianKnowledgeVaultAdapter implements KnowledgeVaultAdapter {
             : { providerConversationId: ref.providerConversationId }),
           conversationFingerprint: ref.conversationFingerprint,
           messageFingerprints: [...ref.messageFingerprints],
-          sourceNotePath: match.path,
+          sourceNotePath: match.entry.path,
         });
       }
+      if (
+        !(await revalidateSelectedRegistry(
+          context,
+          root,
+          registry.initial,
+          selected,
+        ))
+      )
+        return sourceFailure("KNOWLEDGE_SOURCE_STALE");
       return { ok: true, sources: resolved };
     } catch {
       return sourceFailure("KNOWLEDGE_SOURCE_STALE");
