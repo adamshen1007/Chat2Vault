@@ -42,6 +42,10 @@ import {
   runM06RuntimeScenarios,
   type M06RuntimeEvidence,
 } from "./runtime-test-m06.js";
+import {
+  installM06MutationLedger,
+  type M06MutationLedger,
+} from "./runtime-test-mutation-ledger.js";
 
 export interface M05RuntimeInput {
   port: number;
@@ -107,6 +111,7 @@ export default class M05RuntimePlugin extends Plugin {
   private knowledgeInvalidator:
     ((reason: "settings" | "unload") => void) | undefined;
   private providerCalls = 0;
+  private m06MutationLedger: M06MutationLedger | undefined;
   public override settings: Chat2VaultSettingsV4 = {
     schemaVersion: 4,
     installationId: "44444444-4444-4444-8444-444444444444",
@@ -227,6 +232,8 @@ export default class M05RuntimePlugin extends Plugin {
     this.knowledgeInvalidator?.("unload");
     this.controller.close();
     this.stateObservers.clear();
+    this.m06MutationLedger?.restore();
+    this.m06MutationLedger = undefined;
   }
 
   public savePreviewMessagesPerPage(): Promise<{ status: "unchanged" }> {
@@ -295,11 +302,40 @@ export default class M05RuntimePlugin extends Plugin {
     const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
     if (!(view instanceof Chat2VaultView))
       return Promise.reject(new Error("M06 runtime view unavailable"));
-    return runM06RuntimeScenarios(this.app, view, () => this.providerCalls);
+    const ledger = this.m06MutationLedger;
+    if (ledger === undefined)
+      return Promise.reject(new Error("M06 mutation ledger unavailable"));
+    return runM06RuntimeScenarios(
+      this.app,
+      view,
+      () => this.providerCalls,
+      ledger,
+    ).finally(() => {
+      ledger.restore();
+      if (this.m06MutationLedger === ledger) this.m06MutationLedger = undefined;
+    });
   }
 
-  public prepareM06RuntimeVault(): Promise<void> {
-    return prepareM06RuntimeVault(this.app);
+  public installM06MutationLedger(): void {
+    if (this.m06MutationLedger !== undefined)
+      throw new Error("M06 mutation ledger already installed");
+    this.m06MutationLedger = installM06MutationLedger(
+      this.app.vault,
+      "Sources/synthetic-source.md",
+      "inactive",
+    );
+  }
+
+  public async prepareM06RuntimeVault(): Promise<void> {
+    const ledger = this.m06MutationLedger;
+    if (ledger === undefined)
+      throw new Error("M06 mutation ledger unavailable");
+    ledger.setPhase("fixture-setup");
+    try {
+      await prepareM06RuntimeVault(this.app);
+    } finally {
+      ledger.setPhase("inactive");
+    }
   }
 }
 

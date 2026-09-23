@@ -8,8 +8,9 @@ import type {
 import type { KnowledgeWriteExecutionResult } from "./knowledge-executor.js";
 import type { Chat2VaultView } from "./view.js";
 import {
-  installM06MutationLedger,
   type M06MutationAttempt,
+  type M06MutationLedger,
+  type M06MutationPhase,
 } from "./runtime-test-mutation-ledger.js";
 
 export const M06_RUNTIME_SCENARIOS = Object.freeze([
@@ -192,6 +193,7 @@ export async function runM06RuntimeScenarios(
   app: App,
   view: Chat2VaultView,
   providerCallCount: () => number,
+  mutationLedger: M06MutationLedger,
 ): Promise<M06RuntimeEvidence> {
   const runtime = runtimeView(view);
   const candidates = [candidate(1), candidate(2), candidate(3)] as const;
@@ -201,24 +203,36 @@ export async function runM06RuntimeScenarios(
   );
   const sourceBeforeHash = sha256(sourceBefore);
   const providerBefore = providerCallCount();
-  const mutationLedger = installM06MutationLedger(app.vault, sourcePath);
+  const inPhase = async <T>(
+    phase: M06MutationPhase,
+    operation: () => T | Promise<T>,
+  ): Promise<T> => {
+    mutationLedger.setPhase(phase);
+    try {
+      return await operation();
+    } finally {
+      mutationLedger.setPhase("inactive");
+    }
+  };
 
   try {
-    runtime.installKnowledgeCandidates(candidates);
-    runtime.draw(runtime.controller.snapshot);
     const firstId = candidates[0].id;
     const secondId = candidates[1].id;
     const thirdId = candidates[2].id;
-    click(runtime, firstId, "accept");
-    click(runtime, secondId, "edit");
-    const editedTitle = runtime.contentEl.querySelector<HTMLInputElement>(
-      '[aria-label="Knowledge title"]',
-    );
-    runtimeAssertion(editedTitle !== null, "edit title available");
-    editedTitle.value = "Synthetic edited runtime title";
-    editedTitle.dispatchEvent(new Event("input", { bubbles: true }));
-    click(runtime, secondId, "save-edit");
-    click(runtime, thirdId, "reject");
+    await inPhase("review-accept-edit-reject", () => {
+      runtime.installKnowledgeCandidates(candidates);
+      runtime.draw(runtime.controller.snapshot);
+      click(runtime, firstId, "accept");
+      click(runtime, secondId, "edit");
+      const editedTitle = runtime.contentEl.querySelector<HTMLInputElement>(
+        '[aria-label="Knowledge title"]',
+      );
+      runtimeAssertion(editedTitle !== null, "edit title available");
+      editedTitle.value = "Synthetic edited runtime title";
+      editedTitle.dispatchEvent(new Event("input", { bubbles: true }));
+      click(runtime, secondId, "save-edit");
+      click(runtime, thirdId, "reject");
+    });
     const controller = runtime.knowledgeController;
     runtimeAssertion(
       controller !== undefined,
@@ -231,9 +245,11 @@ export async function runM06RuntimeScenarios(
       "accept/edit/reject decisions",
     );
 
-    select(runtime, firstId, true);
-    select(runtime, secondId, true);
-    await runtime.previewKnowledge();
+    await inPhase("multi-select-dry-run", async () => {
+      select(runtime, firstId, true);
+      select(runtime, secondId, true);
+      await runtime.previewKnowledge();
+    });
     const firstPlan = controller.snapshot.plan;
     runtimeAssertion(
       controller.snapshot.status === "ready" &&
@@ -242,18 +258,20 @@ export async function runM06RuntimeScenarios(
       "two-candidate dry-run is ready",
     );
 
-    select(runtime, firstId, false);
-    const staleWrite = runtime.contentEl.querySelector<HTMLButtonElement>(
-      '[aria-label="Write current ready knowledge plan"]',
-    );
-    runtimeAssertion(
-      controller.snapshot.plan === undefined && staleWrite?.disabled === true,
-      "stale preview disables write",
-    );
-    select(runtime, firstId, true);
-    await runtime.previewKnowledge();
+    await inPhase("stale-preview-disabled", async () => {
+      select(runtime, firstId, false);
+      const staleWrite = runtime.contentEl.querySelector<HTMLButtonElement>(
+        '[aria-label="Write current ready knowledge plan"]',
+      );
+      runtimeAssertion(
+        controller.snapshot.plan === undefined && staleWrite?.disabled === true,
+        "stale preview disables write",
+      );
+      select(runtime, firstId, true);
+      await runtime.previewKnowledge();
+    });
 
-    await runtime.writeKnowledge();
+    await inPhase("verified-create", () => runtime.writeKnowledge());
     const created = runtime.knowledgeWriteResult;
     runtimeAssertion(
       created?.status === "saved" &&
@@ -271,8 +289,10 @@ export async function runM06RuntimeScenarios(
       })),
     );
 
-    await runtime.previewKnowledge();
-    await runtime.writeKnowledge();
+    await inPhase("idempotent-retry-no-op", async () => {
+      await runtime.previewKnowledge();
+      await runtime.writeKnowledge();
+    });
     const noOp = runtime.knowledgeWriteResult;
     runtimeAssertion(
       noOp?.status === "saved" &&
@@ -281,11 +301,13 @@ export async function runM06RuntimeScenarios(
       "idempotent no-op retry",
     );
 
-    select(runtime, firstId, false);
-    select(runtime, secondId, false);
-    click(runtime, thirdId, "accept");
-    select(runtime, thirdId, true);
-    await runtime.previewKnowledge();
+    await inPhase("conflict-refusal", async () => {
+      select(runtime, firstId, false);
+      select(runtime, secondId, false);
+      click(runtime, thirdId, "accept");
+      select(runtime, thirdId, true);
+      await runtime.previewKnowledge();
+    });
     const conflictSnapshot: KnowledgeControllerSnapshot = controller.snapshot;
     const conflictPlan = conflictSnapshot.plan;
     runtimeAssertion(
@@ -295,13 +317,10 @@ export async function runM06RuntimeScenarios(
     const [conflictEntry] = conflictPlan.entries;
     runtimeAssertion(conflictEntry !== undefined, "conflict plan entry");
     const conflictPath = conflictEntry.targetPath;
-    mutationLedger.setPhase("fixture");
-    try {
-      await app.vault.create(conflictPath, "synthetic conflicting bytes\n");
-    } finally {
-      mutationLedger.setPhase("production");
-    }
-    await runtime.writeKnowledge();
+    await inPhase("conflict-fixture", () =>
+      app.vault.create(conflictPath, "synthetic conflicting bytes\n"),
+    );
+    await inPhase("conflict-refusal", () => runtime.writeKnowledge());
     const conflict = runtime.knowledgeWriteResult;
     runtimeAssertion(
       conflict?.status === "conflict" &&
@@ -310,9 +329,11 @@ export async function runM06RuntimeScenarios(
       "conflict refusal",
     );
 
-    const createdBytes = await Promise.all(
-      created.ledger.map(({ targetPath }) =>
-        app.vault.adapter.read(targetPath),
+    const createdBytes = await inPhase("source-backlink", () =>
+      Promise.all(
+        created.ledger.map(({ targetPath }) =>
+          app.vault.adapter.read(targetPath),
+        ),
       ),
     );
     runtimeAssertion(
@@ -322,28 +343,32 @@ export async function runM06RuntimeScenarios(
       "trusted source backlink",
     );
     const sourceAfter = new Uint8Array(
-      await app.vault.adapter.readBinary(sourcePath),
+      await inPhase("source-note-unchanged", () =>
+        app.vault.adapter.readBinary(sourcePath),
+      ),
     );
     const sourceAfterHash = sha256(sourceAfter);
     runtimeAssertion(
       sourceBeforeHash === sourceAfterHash,
       "source note bytes unchanged",
     );
-    runtimeAssertion(
-      providerCallCount() === providerBefore,
-      "knowledge path makes zero provider calls",
-    );
+    await inPhase("provider-not-called", () => {
+      runtimeAssertion(
+        providerCallCount() === providerBefore,
+        "knowledge path makes zero provider calls",
+      );
+    });
     const mutationAttempts = mutationLedger.entries();
     runtimeAssertion(
       mutationAttempts.length > 0 &&
         mutationAttempts.every(
-          ({ path, blocked }) =>
-            path !== sourcePath &&
+          ({ path, phase, blocked }) =>
             !blocked &&
             !path.startsWith("/") &&
-            !path.includes(".."),
+            !path.includes("..") &&
+            (path !== sourcePath || phase === "fixture-setup"),
         ),
-      "mutation attempt ledger is source-free and relative",
+      "mutation attempt ledger is relative and source-immutable after setup",
     );
 
     const knowledge = [
@@ -421,6 +446,6 @@ export async function runM06RuntimeScenarios(
     );
     return evidence;
   } finally {
-    mutationLedger.restore();
+    mutationLedger.setPhase("inactive");
   }
 }

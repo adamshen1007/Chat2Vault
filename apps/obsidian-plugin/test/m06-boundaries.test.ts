@@ -23,6 +23,33 @@ const sentinel = "M06_SENTINEL_CONTENT_MUST_NOT_ESCAPE";
 const conversationFingerprint = `sha256:${"1".repeat(64)}`;
 const messageFingerprint = `sha256:${"2".repeat(64)}`;
 const candidateId = `sha256:${"3".repeat(64)}`;
+const completeMutationMethods = [
+  "append",
+  "appendBinary",
+  "appendFile",
+  "copy",
+  "create",
+  "createBinary",
+  "createFolder",
+  "delete",
+  "mkdir",
+  "modify",
+  "modifyBinary",
+  "process",
+  "remove",
+  "rename",
+  "rmdir",
+  "rm",
+  "trash",
+  "trashFile",
+  "trashLocal",
+  "trashSystem",
+  "truncate",
+  "unlink",
+  "write",
+  "writeBinary",
+  "writeFile",
+] as const;
 
 function candidate(id = candidateId): PreviewCandidate {
   return {
@@ -295,6 +322,70 @@ describe("M06 capability and privacy boundary", () => {
     expect(runner).not.toContain("providerTransport: {}");
   });
 
+  it("derives one complete mutation authority from the installed Obsidian API", () => {
+    const runtimeLedger = readFileSync(
+      join(pluginRoot, "src/runtime-test-mutation-ledger.ts"),
+      "utf8",
+    );
+    const sourceFile = ts.createSourceFile(
+      "runtime-test-mutation-ledger.ts",
+      runtimeLedger,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const declaration = sourceFile.statements
+      .filter(ts.isVariableStatement)
+      .flatMap((statement) => statement.declarationList.declarations)
+      .find(
+        (item) =>
+          ts.isIdentifier(item.name) &&
+          item.name.text === "M06_MUTATION_METHODS",
+      );
+    let initializer = declaration?.initializer;
+    if (initializer !== undefined && ts.isAsExpression(initializer))
+      initializer = initializer.expression;
+    const methods =
+      initializer !== undefined && ts.isArrayLiteralExpression(initializer)
+        ? initializer.elements
+            .filter(ts.isStringLiteral)
+            .map((element) => element.text)
+            .sort()
+        : [];
+    expect(methods).toEqual([...completeMutationMethods].sort());
+
+    const obsidianTypes = readFileSync(
+      join(pluginRoot, "node_modules/obsidian/obsidian.d.ts"),
+      "utf8",
+    );
+    for (const declarationText of [
+      "write(normalizedPath: string, data: string",
+      "writeBinary(normalizedPath: string, data: ArrayBuffer",
+      "append(normalizedPath: string, data: string",
+      "appendBinary(normalizedPath: string, data: ArrayBuffer",
+      "process(normalizedPath: string, fn: (data: string) => string",
+      "mkdir(normalizedPath: string): Promise<void>",
+      "trashSystem(normalizedPath: string): Promise<boolean>",
+      "trashLocal(normalizedPath: string): Promise<void>",
+      "rmdir(normalizedPath: string, recursive: boolean): Promise<void>",
+      "remove(normalizedPath: string): Promise<void>",
+      "rename(normalizedPath: string, normalizedNewPath: string)",
+      "copy(normalizedPath: string, normalizedNewPath: string)",
+      "create(path: string, data: string",
+      "createBinary(path: string, data: ArrayBuffer",
+      "createFolder(path: string): Promise<TFolder>",
+      "delete(file: TAbstractFile, force?: boolean): Promise<void>",
+      "trash(file: TAbstractFile, system: boolean): Promise<void>",
+      "rename(file: TAbstractFile, newPath: string): Promise<void>",
+      "modify(file: TFile, data: string",
+      "modifyBinary(file: TFile, data: ArrayBuffer",
+      "append(file: TFile, data: string",
+      "appendBinary(file: TFile, data: ArrayBuffer",
+      "process(file: TFile, fn: (data: string) => string",
+      "copy<T extends TAbstractFile>(file: T, newPath: string)",
+    ])
+      expect(obsidianTypes).toContain(declarationText);
+  });
+
   it.each([
     ["direct write", 'io.write("Sources/synthetic-source.md", "changed")'],
     [
@@ -309,6 +400,21 @@ describe("M06 capability and privacy boundary", () => {
       "destructured rename",
       "const { rename } = adapter; rename(sourceFile, target)",
     ],
+    ["assignment alias", "let mutate; mutate = io.modify"],
+    ["destructuring assignment", "let mutate; ({ rename: mutate } = adapter)"],
+    ["array indirection", "const bucket = [io.delete]"],
+    ["object indirection", "const bucket = { mutate: io.copy }"],
+    ["bound reference", "const mutate = io.write.bind(io)"],
+    ["call reference", "io.write.call(io, sourcePath, original)"],
+    ["apply reference", "io.write.apply(io, [sourcePath, original])"],
+    ["optional reference", "io?.append?.(sourcePath, original)"],
+    [
+      "computed optional reference",
+      'io?.["appendBinary"]?.(sourcePath, bytes)',
+    ],
+    ["appendBinary", "adapter.appendBinary(sourcePath, bytes)"],
+    ["trashSystem", "adapter.trashSystem(sourcePath)"],
+    ["trashLocal", "adapter.trashLocal(sourcePath)"],
     ["dynamic computed call", "io[method](sourcePath, original)"],
   ])("rejects adversarial %s mutation authority", async (_name, statement) => {
     const directory = await mkdtemp(join(tmpdir(), "c2v-m06-boundary-"));

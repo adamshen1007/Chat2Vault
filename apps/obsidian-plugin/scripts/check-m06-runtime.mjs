@@ -26,17 +26,6 @@ const decompress = promisify(gunzip);
 const pluginRoot = new URL("..", import.meta.url).pathname;
 const repositoryRoot = resolve(pluginRoot, "../..");
 const legacyHarness = join(pluginRoot, "scripts/check-m05-runtime.mjs");
-const expectedScenarios = Object.freeze([
-  "review-accept-edit-reject",
-  "multi-select-dry-run",
-  "stale-preview-disabled",
-  "verified-create",
-  "idempotent-retry-no-op",
-  "conflict-refusal",
-  "source-backlink",
-  "source-note-unchanged",
-  "provider-not-called",
-]);
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -165,40 +154,19 @@ function assertCompleteM06RuntimeRows(rows, expectedIdentity, requestedRow) {
   ) throw new Error("M06 runtime identity mismatch");
   const evidence = row.m06;
   const provenanceFailures = validateM06RuntimeProvenance(requestedRow, row.version, row.sourceMetadata);
+  const evidenceFailures = validateM06RuntimeEvidence(evidence);
   if (
     provenanceFailures.length !== 0 ||
-    JSON.stringify(evidence?.scenarioRegistry) !== JSON.stringify(${JSON.stringify(expectedScenarios)}) ||
-    evidence?.scenarios?.length !== ${String(expectedScenarios.length)} ||
-    evidence.scenarios.some((scenario) => scenario.outcome !== "success") ||
-    evidence.source?.unchanged !== true ||
-    evidence.source.beforeHash !== evidence.source.afterHash ||
-    evidence.counts?.candidates !== 3 ||
-    evidence.counts?.selected !== 2 ||
-    evidence.counts?.created !== 2 ||
-    evidence.counts?.noOp !== 2 ||
-    evidence.counts?.conflicts !== 1 ||
-    evidence.counts?.providerCalls !== 0 ||
-    evidence.privacy?.relativePathsOnly !== true ||
-    evidence.privacy?.retainedContent !== false ||
-    !Array.isArray(evidence.mutationAttempts) ||
-    evidence.mutationAttempts.length === 0 ||
-    evidence.mutationAttempts.some((attempt) =>
-      attempt.blocked !== false ||
-      attempt.path === "Sources/synthetic-source.md" ||
-      attempt.path.startsWith("/") ||
-      attempt.path.includes("..")
-    ) ||
+    evidenceFailures.length !== 0 ||
     row.mutationCount !== 3 ||
     row.persistenceViolationCount !== 0 ||
     row.networkAttemptCount !== 1 ||
     row.backgroundAttemptCount !== 0
-  ) throw new Error("M06 runtime acceptance predicate failed");
+  ) throw new Error("M06 runtime acceptance predicate failed: "+JSON.stringify({provenanceFailures,evidenceFailures,mutationCount:row.mutationCount,persistenceViolationCount:row.persistenceViolationCount,networkAttemptCount:row.networkAttemptCount,backgroundAttemptCount:row.backgroundAttemptCount,mutationAttempts:evidence?.mutationAttempts}));
   if (
     typeof evidence.candidateHash !== "string" ||
     !/^[0-9a-f]{64}$/u.test(evidence.candidateHash) ||
-    evidence.knowledge.some(({ path, sha256 }) =>
-      typeof path !== "string" || path.startsWith("/") || path.includes("..") || !/^[0-9a-f]{64}$/u.test(sha256)
-    )
+    !Array.isArray(evidence.knowledge)
   ) throw new Error("M06 runtime retained evidence is unsafe");
 }
 `;
@@ -209,7 +177,7 @@ function buildDriver(source, row) {
   driver = replaceOnce(
     driver,
     'import { compareM05RuntimeArtifacts } from "./compare-m05-runtime-artifact.mjs";\n',
-    `import { compareM05RuntimeArtifacts } from ${JSON.stringify(new URL("./compare-m05-runtime-artifact.mjs", import.meta.url).href)};\nimport { validateM06RuntimeProvenance } from ${JSON.stringify(new URL("./m06-runtime-provenance.mjs", import.meta.url).href)};\n`,
+    `import { compareM05RuntimeArtifacts } from ${JSON.stringify(new URL("./compare-m05-runtime-artifact.mjs", import.meta.url).href)};\nimport { validateM06RuntimeEvidence, validateM06RuntimeProvenance } from ${JSON.stringify(new URL("./m06-runtime-provenance.mjs", import.meta.url).href)};\n`,
     "legacy comparison import",
   );
   driver = replaceOnce(
@@ -232,13 +200,19 @@ function buildDriver(source, row) {
     );
   driver = driver.replace(
     evidenceCall,
-    "const evidence=await plugin.runM06RuntimeScenarios();return{",
+    "await new Promise((resolve)=>setTimeout(resolve,1500));const evidence=await plugin.runM06RuntimeScenarios();return{",
   );
   driver = replaceOnce(
     driver,
-    'const mutationMethods=["create","createBinary","modify","modifyBinary","delete","rename"];',
-    'await plugin.prepareM06RuntimeVault();const mutationMethods=["create","createBinary","modify","modifyBinary","delete","rename"];',
-    "M06 fixture preparation before mutation accounting",
+    'await app.plugins.enablePlugin("chat-to-vault");let runtimeLeaf=',
+    'await app.plugins.enablePlugin("chat-to-vault");const plugin=app.plugins.plugins["chat-to-vault"];plugin.installM06MutationLedger();await plugin.prepareM06RuntimeVault();let runtimeLeaf=',
+    "M06 interception and fixture setup before view construction",
+  );
+  driver = replaceOnce(
+    driver,
+    'const plugin=app.plugins.plugins["chat-to-vault"];await plugin.importSynthetic',
+    "await plugin.importSynthetic",
+    "M06 early plugin reference",
   );
   const legacyUiExercise =
     /hostUiEvidence = await exerciseAccessibilityAndZoom\([\s\S]*?markStage,\n {14}\);/u;

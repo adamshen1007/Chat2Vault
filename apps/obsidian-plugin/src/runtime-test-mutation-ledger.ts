@@ -1,5 +1,19 @@
 export type M06MutationSurface = "vault" | "adapter";
-export type M06MutationPhase = "production" | "fixture";
+export type M06MutationPhase =
+  | "inactive"
+  | "production"
+  | "fixture"
+  | "fixture-setup"
+  | "review-accept-edit-reject"
+  | "multi-select-dry-run"
+  | "stale-preview-disabled"
+  | "verified-create"
+  | "idempotent-retry-no-op"
+  | "conflict-fixture"
+  | "conflict-refusal"
+  | "source-backlink"
+  | "source-note-unchanged"
+  | "provider-not-called";
 
 export interface M06MutationAttempt {
   surface: M06MutationSurface;
@@ -17,45 +31,33 @@ export interface M06MutationLedger {
 
 type MutableSurface = Record<string, unknown>;
 
-const VAULT_MUTATIONS = Object.freeze([
+export const M06_MUTATION_METHODS = [
+  "append",
+  "appendBinary",
+  "appendFile",
+  "copy",
   "create",
   "createBinary",
   "createFolder",
-  "write",
-  "writeBinary",
-  "append",
-  "process",
+  "delete",
+  "mkdir",
   "modify",
   "modifyBinary",
-  "delete",
+  "process",
   "remove",
   "rename",
-  "copy",
+  "rm",
+  "rmdir",
   "trash",
   "trashFile",
-  "mkdir",
-  "rmdir",
-] as const);
-
-const ADAPTER_MUTATIONS = Object.freeze([
+  "trashLocal",
+  "trashSystem",
+  "truncate",
+  "unlink",
   "write",
   "writeBinary",
-  "append",
-  "process",
-  "modify",
-  "modifyBinary",
-  "delete",
-  "remove",
-  "rename",
-  "copy",
-  "trash",
-  "trashFile",
-  "mkdir",
-  "rmdir",
-  "create",
-  "createBinary",
-  "createFolder",
-] as const);
+  "writeFile",
+] as const;
 
 function attemptPath(value: unknown): string {
   const candidate =
@@ -75,6 +77,7 @@ function attemptPath(value: unknown): string {
 export function installM06MutationLedger(
   vaultValue: unknown,
   sourcePath: string,
+  initialPhase: M06MutationPhase = "production",
 ): M06MutationLedger {
   const vault = vaultValue as MutableSurface;
   const adapterValue = vault.adapter;
@@ -83,7 +86,7 @@ export function installM06MutationLedger(
   const adapter = adapterValue as MutableSurface;
   const attempts: M06MutationAttempt[] = [];
   const restores: (() => void)[] = [];
-  let phase: M06MutationPhase = "production";
+  let phase = initialPhase;
 
   const wrap = (
     surfaceName: M06MutationSurface,
@@ -97,14 +100,22 @@ export function installM06MutationLedger(
     const wrapped = function (this: unknown, ...arguments_: unknown[]) {
       const path = attemptPath(arguments_[0]);
       const targetPath = attemptPath(arguments_[1]);
-      const blocked = path === sourcePath || targetPath === sourcePath;
-      attempts.push({
-        surface: surfaceName,
-        method,
-        path,
-        phase,
-        blocked,
-      });
+      const sourceMutation = path === sourcePath || targetPath === sourcePath;
+      const allowedFixtureSourceCreate =
+        phase === "fixture-setup" &&
+        ((surfaceName === "vault" && method === "create") ||
+          (surfaceName === "adapter" && method === "write")) &&
+        path === sourcePath &&
+        targetPath !== sourcePath;
+      const blocked = sourceMutation && !allowedFixtureSourceCreate;
+      if (phase !== "inactive")
+        attempts.push({
+          surface: surfaceName,
+          method,
+          path,
+          phase,
+          blocked,
+        });
       if (blocked)
         return Promise.reject(
           new Error(`M06 source mutation prohibited: ${surfaceName}.${method}`),
@@ -118,8 +129,8 @@ export function installM06MutationLedger(
     });
   };
 
-  for (const method of VAULT_MUTATIONS) wrap("vault", vault, method);
-  for (const method of ADAPTER_MUTATIONS) wrap("adapter", adapter, method);
+  for (const method of M06_MUTATION_METHODS) wrap("vault", vault, method);
+  for (const method of M06_MUTATION_METHODS) wrap("adapter", adapter, method);
 
   let restored = false;
   return {

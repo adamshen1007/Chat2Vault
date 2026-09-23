@@ -30,6 +30,13 @@ function runtimeVault() {
       const before = files.get(path) ?? new Uint8Array();
       files.set(path, encode(`${new TextDecoder().decode(before)}${content}`));
     },
+    appendBinary: async (path: string, content: ArrayBuffer): Promise<void> => {
+      const before = files.get(path) ?? new Uint8Array();
+      const after = new Uint8Array(before.length + content.byteLength);
+      after.set(before);
+      after.set(new Uint8Array(content), before.length);
+      files.set(path, after);
+    },
     process: async (
       path: string,
       callback: (content: string) => string,
@@ -50,6 +57,13 @@ function runtimeVault() {
       if (bytes !== undefined) files.set(target, new Uint8Array(bytes));
     },
     trash: async (path: string): Promise<void> => {
+      files.delete(path);
+    },
+    trashSystem: async (path: string): Promise<boolean> => {
+      files.delete(path);
+      return true;
+    },
+    trashLocal: async (path: string): Promise<void> => {
       files.delete(path);
     },
     mkdir: async (): Promise<void> => undefined,
@@ -84,6 +98,23 @@ function runtimeVault() {
     ): Promise<void> => {
       const before = new TextDecoder().decode(files.get(file.path));
       files.set(file.path, encode(callback(before)));
+    },
+    append: async (file: SyntheticFile, content: string): Promise<void> => {
+      const before = files.get(file.path) ?? new Uint8Array();
+      files.set(
+        file.path,
+        encode(`${new TextDecoder().decode(before)}${content}`),
+      );
+    },
+    appendBinary: async (
+      file: SyntheticFile,
+      content: ArrayBuffer,
+    ): Promise<void> => {
+      const before = files.get(file.path) ?? new Uint8Array();
+      const after = new Uint8Array(before.length + content.byteLength);
+      after.set(before);
+      after.set(new Uint8Array(content), before.length);
+      files.set(file.path, after);
     },
     delete: async (file: SyntheticFile): Promise<void> => {
       files.delete(file.path);
@@ -179,6 +210,47 @@ describe("M06 runtime mutation attempt ledger", () => {
           blocked: false,
         },
       ]);
+    } finally {
+      ledger.restore();
+    }
+  });
+
+  it("intercepts every newly supported binary and trash mutation before capture", async () => {
+    const fixture = runtimeVault();
+    const ledger = installM06MutationLedger(fixture.vault, sourcePath);
+    const captured = {
+      vaultAppendBinary: fixture.vault.appendBinary.bind(fixture.vault),
+      adapterAppendBinary: fixture.adapter.appendBinary.bind(fixture.adapter),
+      trashSystem: fixture.adapter.trashSystem.bind(fixture.adapter),
+      trashLocal: fixture.adapter.trashLocal.bind(fixture.adapter),
+    };
+    try {
+      await expect(
+        captured.vaultAppendBinary(
+          { path: sourcePath },
+          new Uint8Array([1]).buffer,
+        ),
+      ).rejects.toThrow("source mutation prohibited");
+      await expect(
+        captured.adapterAppendBinary(sourcePath, new Uint8Array([2]).buffer),
+      ).rejects.toThrow("source mutation prohibited");
+      await expect(captured.trashSystem(sourcePath)).rejects.toThrow(
+        "source mutation prohibited",
+      );
+      await expect(captured.trashLocal(sourcePath)).rejects.toThrow(
+        "source mutation prohibited",
+      );
+      expect(
+        ledger.entries().map(({ surface, method }) => [surface, method]),
+      ).toEqual([
+        ["vault", "appendBinary"],
+        ["adapter", "appendBinary"],
+        ["adapter", "trashSystem"],
+        ["adapter", "trashLocal"],
+      ]);
+      expect(
+        new Uint8Array(await fixture.adapter.readBinary(sourcePath)),
+      ).toEqual(fixture.initialSource);
     } finally {
       ledger.restore();
     }
