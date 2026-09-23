@@ -348,6 +348,20 @@ describe("M05 ProviderController readiness", () => {
 });
 
 describe("M05 ProviderController execution", () => {
+  it("emits capability-neutral validated-candidate replacements and invalidations", async () => {
+    const changes: number[] = [];
+    const { controller } = harness({
+      onCandidatesChanged: (candidates) => {
+        changes.push(candidates.length);
+      },
+    });
+
+    expect((await controller.distill()).status).toBe("valid");
+    controller.invalidate("selection-change");
+
+    expect(changes).toEqual([1, 0]);
+  });
+
   it("installs a valid result and replaces the preview", async () => {
     const { controller } = harness();
     expect((await controller.distill()).status).toBe("valid");

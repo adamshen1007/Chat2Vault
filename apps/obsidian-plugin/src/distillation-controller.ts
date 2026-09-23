@@ -74,6 +74,7 @@ type MaybePromise<T> = T | Promise<T>;
 export interface ManualDistillationServices {
   current(): ManualDistillationContext;
   writeClipboard(text: string): MaybePromise<void>;
+  onCandidatesChanged?(candidates: readonly PreviewCandidate[]): void;
   buildRequest?(
     conversation: CanonicalConversation,
   ): MaybePromise<RequestBuildResult>;
@@ -106,6 +107,25 @@ function isPromise<T>(value: MaybePromise<T>): value is Promise<T> {
   );
 }
 
+function detachedCandidates(
+  candidates: readonly PreviewCandidate[],
+): PreviewCandidate[] {
+  return candidates.map((candidate) => {
+    const sourceRef = candidate.sourceRefs[0];
+    return {
+      ...candidate,
+      sourceRefs: [
+        {
+          ...sourceRef,
+          messageFingerprints: [...sourceRef.messageFingerprints],
+        },
+      ],
+      suggestedLinks: [...candidate.suggestedLinks],
+      suggestedTags: [...candidate.suggestedTags],
+    };
+  });
+}
+
 function result(
   status: ManualOperationResult["status"],
   diagnostics: M04Diagnostic[] = [],
@@ -136,6 +156,14 @@ export class ManualDistillationController {
 
   public get snapshot(): ManualDistillationSnapshot {
     return this.currentSnapshot;
+  }
+
+  private candidatesChanged(candidates: readonly PreviewCandidate[]): void {
+    try {
+      this.services.onCandidatesChanged?.(detachedCandidates(candidates));
+    } catch {
+      // Candidate notifications are capability-neutral and never own M04 state.
+    }
   }
 
   private publish(
@@ -262,6 +290,7 @@ export class ManualDistillationController {
       candidates: [],
       diagnostics: [],
     };
+    this.candidatesChanged([]);
   }
 
   public async prepare(): Promise<ManualOperationResult> {
@@ -269,6 +298,7 @@ export class ManualDistillationController {
     if (rejected !== undefined) return rejected;
     this.requestGeneration += 1;
     this.activeOwner = undefined;
+    const hadCandidates = this.currentSnapshot.candidates.length > 0;
     this.publish({
       status: "preparing",
       request: undefined,
@@ -277,6 +307,7 @@ export class ManualDistillationController {
       candidates: [],
       diagnostics: [],
     });
+    if (hadCandidates) this.candidatesChanged([]);
     const capture = this.start("Prepare");
     this.publish({ status: "preparing" });
     const conversation = this.services.current().conversation;
@@ -408,6 +439,7 @@ export class ManualDistillationController {
         candidates: [],
         diagnostics: [m04Diagnostic("DISTILLATION_RESULT_TOO_LARGE")],
       });
+      this.candidatesChanged([]);
       return;
     }
     this.publish({
@@ -418,6 +450,7 @@ export class ManualDistillationController {
       candidates: [],
       diagnostics: [],
     });
+    this.candidatesChanged([]);
   }
 
   public async validate(): Promise<ManualOperationResult> {
@@ -435,7 +468,9 @@ export class ManualDistillationController {
     this.activeConversationFingerprint = request.conversationFingerprint;
     capture.pasteGeneration = this.pasteGeneration;
     capture.paste = paste;
+    const hadCandidates = this.currentSnapshot.candidates.length > 0;
     this.publish({ status: "validating", candidates: [], diagnostics: [] });
+    if (hadCandidates) this.candidatesChanged([]);
     let validated: DistillationValidationResult;
     try {
       const pending = (
@@ -464,10 +499,13 @@ export class ManualDistillationController {
         },
         result("invalid", validated.diagnostics),
       );
-    return this.settle(
+    const settled = this.settle(
       capture,
       { status: "valid", candidates: validated.candidates, diagnostics: [] },
       result("valid"),
     );
+    if (settled.status === "valid")
+      this.candidatesChanged(this.currentSnapshot.candidates);
+    return settled;
   }
 }

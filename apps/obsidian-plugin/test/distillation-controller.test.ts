@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   M04_RESULT_MAX_UTF8_BYTES,
   buildDistillationRequest,
+  m04Diagnostic,
   renderDistillationPrompt,
   validateDistillationResult,
   type PromptRenderResult,
@@ -55,6 +56,90 @@ function validResult(requestId: string, fingerprint: string): string {
 }
 
 describe("ManualDistillationController", () => {
+  it("emits capability-neutral validated-candidate replacements and invalidations", async () => {
+    const changes: number[] = [];
+    const current = {
+      loaded: true,
+      selectionGeneration: 1,
+      importGeneration: 1,
+      conversation: conversation(),
+    };
+    const controller = new ManualDistillationController({
+      current: () => current,
+      writeClipboard: async () => undefined,
+      onCandidatesChanged: (candidates) => {
+        changes.push(candidates.length);
+      },
+    });
+
+    await controller.prepare();
+    const request = controller.snapshot.request!;
+    controller.setPaste(
+      validResult(request.requestId, request.conversationFingerprint),
+    );
+    expect(await controller.validate()).toMatchObject({ status: "valid" });
+    controller.setPaste("replacement");
+    controller.invalidate();
+
+    expect(changes).toEqual([0, 1, 0, 0]);
+  });
+
+  it.each(["invalid", "stale"] as const)(
+    "invalidates prior candidate authority before deferred %s re-validation settles",
+    async (outcome) => {
+      let validationCall = 0;
+      let settle!: (result: DistillationValidationResult) => void;
+      const pending = new Promise<DistillationValidationResult>((resolve) => {
+        settle = resolve;
+      });
+      const changes: number[] = [];
+      const current = {
+        loaded: true,
+        selectionGeneration: 1,
+        importGeneration: 1,
+        conversation: conversation(),
+      };
+      const controller = new ManualDistillationController({
+        current: () => current,
+        writeClipboard: async () => undefined,
+        validateResult: (raw, request) => {
+          validationCall += 1;
+          return validationCall === 1
+            ? validateDistillationResult(raw, request)
+            : pending;
+        },
+        onCandidatesChanged: (candidates) => {
+          changes.push(candidates.length);
+        },
+      });
+
+      await controller.prepare();
+      const request = controller.snapshot.request!;
+      controller.setPaste(
+        validResult(request.requestId, request.conversationFingerprint),
+      );
+      expect(await controller.validate()).toMatchObject({ status: "valid" });
+      changes.length = 0;
+
+      const revalidation = controller.validate();
+      expect(controller.snapshot.candidates).toEqual([]);
+      expect(changes).toEqual([0]);
+      if (outcome === "stale") current.selectionGeneration += 1;
+      settle(
+        outcome === "invalid"
+          ? {
+              ok: false,
+              diagnostics: [m04Diagnostic("DISTILLATION_JSON_INVALID")],
+            }
+          : { ok: true, candidates: [] },
+      );
+
+      expect((await revalidation).status).toBe(outcome);
+      expect(controller.snapshot.candidates).toEqual([]);
+      expect(changes).toEqual([0]);
+    },
+  );
+
   it("prepares, explicitly copies, validates, and keeps candidates in memory", async () => {
     const copied = vi.fn(async () => undefined);
     const current = {
