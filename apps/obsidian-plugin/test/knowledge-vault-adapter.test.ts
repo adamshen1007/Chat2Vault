@@ -182,6 +182,7 @@ describe("M06 knowledge vault adapter", () => {
       "Sources/source.md",
       "Sources/source.md",
       "Sources/source.md",
+      "Sources/source.md",
     ]);
     expect(fixture.calls.create).toBe(0);
   });
@@ -373,6 +374,67 @@ describe("M06 knowledge vault adapter", () => {
 
     await expect(
       fixture.adapter().resolveKnowledgeSources(candidate),
+    ).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [{ code: "KNOWLEDGE_SOURCE_STALE" }],
+    });
+    expect(fixture.calls.create).toBe(0);
+  });
+
+  test("fails closed when an unselected registry entry becomes an exact duplicate during final validation", async () => {
+    const fixture = harness();
+    fixture.addSource("Sources/a.md");
+    fixture.addSource(
+      "Sources/z.md",
+      sourceNote(`sha256:${"e".repeat(64)}`, "conversation-z"),
+    );
+    const originalRead = fixture.io.readBinary.bind(fixture.io);
+    let selectedReads = 0;
+    fixture.io.readBinary = async (path) => {
+      const result = await originalRead(path);
+      if (path === "Sources/a.md") {
+        selectedReads += 1;
+        if (selectedReads === 3)
+          fixture.bytes.set("Sources/z.md", sourceNote());
+      }
+      return result;
+    };
+
+    await expect(
+      fixture.adapter().resolveKnowledgeSources(reviewedCandidate()),
+    ).resolves.toMatchObject({
+      ok: false,
+      diagnostics: [{ code: "KNOWLEDGE_SOURCE_AMBIGUOUS" }],
+    });
+    expect(fixture.calls.create).toBe(0);
+  });
+
+  test("fails closed when an unselected registry entry becomes malformed Chat2Vault authority during final validation", async () => {
+    const fixture = harness();
+    fixture.addSource("Sources/a.md");
+    fixture.addSource(
+      "Sources/z.md",
+      sourceNote(`sha256:${"e".repeat(64)}`, "conversation-z"),
+    );
+    const originalRead = fixture.io.readBinary.bind(fixture.io);
+    let selectedReads = 0;
+    fixture.io.readBinary = async (path) => {
+      const result = await originalRead(path);
+      if (path === "Sources/a.md") {
+        selectedReads += 1;
+        if (selectedReads === 3)
+          fixture.bytes.set(
+            "Sources/z.md",
+            new TextEncoder().encode(
+              '---\ntype: "ai-conversation-source"\nknowledge_status: "source"\nsource_provider: "chatgpt"\n---\n',
+            ),
+          );
+      }
+      return result;
+    };
+
+    await expect(
+      fixture.adapter().resolveKnowledgeSources(reviewedCandidate()),
     ).resolves.toMatchObject({
       ok: false,
       diagnostics: [{ code: "KNOWLEDGE_SOURCE_STALE" }],

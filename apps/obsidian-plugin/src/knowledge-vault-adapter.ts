@@ -64,6 +64,25 @@ interface ObservedSourceRegistry {
   entries: readonly ObservedSourceRegistryEntry[];
 }
 
+interface RegistryCandidateSnapshot {
+  logicalPath: string;
+  resolvedPath: string;
+  bytes: Uint8Array;
+}
+
+type SourceFailureCode =
+  | "KNOWLEDGE_SOURCE_UNRESOLVED"
+  | "KNOWLEDGE_SOURCE_AMBIGUOUS"
+  | "KNOWLEDGE_SOURCE_STALE";
+
+type RegistryMatch =
+  | {
+      ok: true;
+      resolved: readonly ResolvedKnowledgeSource[];
+      selected: readonly ObservedSourceRegistryEntry[];
+    }
+  | { ok: false; code: SourceFailureCode };
+
 interface AdapterContext {
   io: SourceVaultIO;
   native: NativeContainmentAdapter | undefined;
@@ -435,18 +454,17 @@ async function discoverSourceRegistry(
   return { initial, entries };
 }
 
-async function revalidateSelectedRegistry(
+async function readCompleteRegistrySnapshot(
   context: AdapterContext,
   root: ExistingRoot,
   initial: readonly { path: string; kind: "folder" | "file" }[],
-  selected: readonly ObservedSourceRegistryEntry[],
-): Promise<boolean> {
+): Promise<readonly RegistryCandidateSnapshot[] | undefined> {
   const { io, native } = context;
   if (
     native === undefined ||
     !(await verifyExistingRootSnapshot(context, root))
   )
-    return false;
+    return undefined;
   const before = await io.list(root.resolvedRoot).catch(() => undefined);
   if (
     before === undefined ||
@@ -457,41 +475,126 @@ async function revalidateSelectedRegistry(
     ) ||
     !listingStable(initial, before)
   )
-    return false;
+    return undefined;
 
-  const unique = new Map(
-    selected.map((source) => [source.resolvedPath, source] as const),
+  const candidates = before
+    .filter(
+      (entry) =>
+        entry.kind === "file" && directName(entry.path).endsWith(".md"),
+    )
+    .map((entry) => ({
+      logicalPath: entry.path.normalize("NFC"),
+      resolvedPath: entry.path,
+    }));
+  if (
+    new Set(candidates.map(({ logicalPath }) => pathCollisionKey(logicalPath)))
+      .size !== candidates.length
+  )
+    return undefined;
+  candidates.sort((left, right) =>
+    compareSourcePaths(left.logicalPath, right.logicalPath),
   );
-  for (const source of unique.values()) {
+
+  const snapshot: RegistryCandidateSnapshot[] = [];
+  for (const candidate of candidates) {
     const physicalBefore = await verifyNativeComponent(
       native,
       root.vaultRealPath,
-      nativePath(io, source.resolvedPath),
+      nativePath(io, candidate.resolvedPath),
     );
-    if (!trustedRegularFile(physicalBefore)) return false;
+    if (!trustedRegularFile(physicalBefore)) return undefined;
     const bytes = await io
-      .readBinary(source.resolvedPath)
+      .readBinary(candidate.resolvedPath)
       .catch(() => undefined);
-    if (bytes === undefined || !bytesEqual(bytes, source.bytes)) return false;
+    if (bytes === undefined) return undefined;
     const physicalAfter = await verifyNativeComponent(
       native,
       root.vaultRealPath,
-      nativePath(io, source.resolvedPath),
+      nativePath(io, candidate.resolvedPath),
     );
-    if (!trustedRegularFile(physicalAfter)) return false;
+    if (!trustedRegularFile(physicalAfter)) return undefined;
+    snapshot.push({
+      ...candidate,
+      bytes: new Uint8Array(bytes),
+    });
   }
 
   const after = await io.list(root.resolvedRoot).catch(() => undefined);
-  return (
-    after !== undefined &&
-    after.every(
+  if (
+    after === undefined ||
+    after.some(
       (entry) =>
-        isM03WellFormedString(entry.path) &&
-        parentPath(entry.path) === root.resolvedRoot,
-    ) &&
-    listingStable(initial, after) &&
-    (await verifyExistingRootSnapshot(context, root))
+        !isM03WellFormedString(entry.path) ||
+        parentPath(entry.path) !== root.resolvedRoot,
+    ) ||
+    !listingStable(initial, after) ||
+    !(await verifyExistingRootSnapshot(context, root))
+  )
+    return undefined;
+  return snapshot;
+}
+
+function registrySnapshotsEqual(
+  left: readonly RegistryCandidateSnapshot[],
+  right: readonly RegistryCandidateSnapshot[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((candidate, index) => {
+      const other = right[index];
+      return (
+        candidate.logicalPath === other?.logicalPath &&
+        candidate.resolvedPath === other.resolvedPath &&
+        bytesEqual(candidate.bytes, other.bytes)
+      );
+    })
   );
+}
+
+async function establishFinalRegistry(
+  context: AdapterContext,
+  root: ExistingRoot,
+  registry: ObservedSourceRegistry,
+  selected: readonly ObservedSourceRegistryEntry[],
+): Promise<ObservedSourceRegistry | undefined> {
+  const first = await readCompleteRegistrySnapshot(
+    context,
+    root,
+    registry.initial,
+  );
+  if (first === undefined) return undefined;
+  const second = await readCompleteRegistrySnapshot(
+    context,
+    root,
+    registry.initial,
+  );
+  if (second === undefined || !registrySnapshotsEqual(first, second))
+    return undefined;
+
+  const finalByPath = new Map(
+    second.map((candidate) => [candidate.resolvedPath, candidate] as const),
+  );
+  for (const source of selected) {
+    const final = finalByPath.get(source.resolvedPath);
+    if (final === undefined || !bytesEqual(source.bytes, final.bytes))
+      return undefined;
+  }
+
+  const entries: ObservedSourceRegistryEntry[] = [];
+  for (const candidate of second) {
+    const entry = parseSourceRegistryEntry(
+      candidate.bytes,
+      candidate.logicalPath,
+    );
+    if (entry !== undefined)
+      entries.push({
+        entry,
+        resolvedPath: candidate.resolvedPath,
+        bytes: new Uint8Array(candidate.bytes),
+      });
+    else if (isChat2VaultLikeMalformed(candidate.bytes)) return undefined;
+  }
+  return { initial: registry.initial, entries };
 }
 
 async function confirmTargetAbsent(
@@ -538,6 +641,42 @@ function sourceExact(entry: SourceRegistryEntry, ref: SourceRef): boolean {
     sourceIdentityEqual(entry, ref) &&
     entry.contentFingerprint === ref.conversationFingerprint
   );
+}
+
+function matchSourceRegistry(
+  refs: readonly SourceRef[],
+  registry: ObservedSourceRegistry,
+): RegistryMatch {
+  const resolved: ResolvedKnowledgeSource[] = [];
+  const selected: ObservedSourceRegistryEntry[] = [];
+  for (const ref of refs) {
+    const matches = registry.entries.filter(({ entry }) =>
+      sourceExact(entry, ref),
+    );
+    if (matches.length > 1)
+      return { ok: false, code: "KNOWLEDGE_SOURCE_AMBIGUOUS" };
+    const match = matches[0];
+    if (match === undefined)
+      return {
+        ok: false,
+        code: registry.entries.some(({ entry }) =>
+          sourceIdentityEqual(entry, ref),
+        )
+          ? "KNOWLEDGE_SOURCE_STALE"
+          : "KNOWLEDGE_SOURCE_UNRESOLVED",
+      };
+    selected.push(match);
+    resolved.push({
+      provider: ref.provider,
+      ...(ref.providerConversationId === undefined
+        ? {}
+        : { providerConversationId: ref.providerConversationId }),
+      conversationFingerprint: ref.conversationFingerprint,
+      messageFingerprints: [...ref.messageFingerprints],
+      sourceNotePath: match.entry.path,
+    });
+  }
+  return { ok: true, resolved, selected };
 }
 
 async function targetState(
@@ -654,12 +793,7 @@ async function targetState(
   }
 }
 
-function sourceFailure(
-  code:
-    | "KNOWLEDGE_SOURCE_UNRESOLVED"
-    | "KNOWLEDGE_SOURCE_AMBIGUOUS"
-    | "KNOWLEDGE_SOURCE_STALE",
-): KnowledgeSourceResolution {
+function sourceFailure(code: SourceFailureCode): KnowledgeSourceResolution {
   return { ok: false, diagnostics: [m06Diagnostic(code)] };
 }
 
@@ -698,44 +832,19 @@ export class ObsidianKnowledgeVaultAdapter implements KnowledgeVaultAdapter {
       const registry = await discoverSourceRegistry(context, root);
       if (registry === undefined)
         return sourceFailure("KNOWLEDGE_SOURCE_STALE");
-      const resolved: ResolvedKnowledgeSource[] = [];
-      const selected: ObservedSourceRegistryEntry[] = [];
-      for (const ref of refs) {
-        const matches = registry.entries.filter(({ entry }) =>
-          sourceExact(entry, ref),
-        );
-        if (matches.length > 1)
-          return sourceFailure("KNOWLEDGE_SOURCE_AMBIGUOUS");
-        const match = matches[0];
-        if (match === undefined)
-          return sourceFailure(
-            registry.entries.some(({ entry }) =>
-              sourceIdentityEqual(entry, ref),
-            )
-              ? "KNOWLEDGE_SOURCE_STALE"
-              : "KNOWLEDGE_SOURCE_UNRESOLVED",
-          );
-        selected.push(match);
-        resolved.push({
-          provider: ref.provider,
-          ...(ref.providerConversationId === undefined
-            ? {}
-            : { providerConversationId: ref.providerConversationId }),
-          conversationFingerprint: ref.conversationFingerprint,
-          messageFingerprints: [...ref.messageFingerprints],
-          sourceNotePath: match.entry.path,
-        });
-      }
-      if (
-        !(await revalidateSelectedRegistry(
-          context,
-          root,
-          registry.initial,
-          selected,
-        ))
-      )
+      const initialMatch = matchSourceRegistry(refs, registry);
+      if (!initialMatch.ok) return sourceFailure(initialMatch.code);
+      const finalRegistry = await establishFinalRegistry(
+        context,
+        root,
+        registry,
+        initialMatch.selected,
+      );
+      if (finalRegistry === undefined)
         return sourceFailure("KNOWLEDGE_SOURCE_STALE");
-      return { ok: true, sources: resolved };
+      const finalMatch = matchSourceRegistry(refs, finalRegistry);
+      if (!finalMatch.ok) return sourceFailure(finalMatch.code);
+      return { ok: true, sources: finalMatch.resolved };
     } catch {
       return sourceFailure("KNOWLEDGE_SOURCE_STALE");
     }
