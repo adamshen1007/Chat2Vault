@@ -139,6 +139,19 @@ function knowledgeRootsReady(
   );
 }
 
+interface KnowledgeEditDraft {
+  candidateId: string;
+  title: string;
+  summary: string;
+  body: string;
+  tags: string;
+  dirty: boolean;
+  invalid: boolean;
+}
+
+type KnowledgeFocusTarget =
+  "accept" | "edit" | "reject" | "selection" | "edit-title";
+
 export class Chat2VaultView extends ItemView {
   private readonly conversationOrder = new ConversationOrderCache();
   private unsubscribe?: () => void;
@@ -171,7 +184,7 @@ export class Chat2VaultView extends ItemView {
   private readonly providerStatusRegion: HTMLParagraphElement;
   private knowledgeController?: KnowledgeController;
   private knowledgeWriteResult: KnowledgeWriteExecutionResult | undefined;
-  private knowledgeEditCandidateId: string | undefined;
+  private knowledgeEditDraft: KnowledgeEditDraft | undefined;
   private knowledgeEditDiagnostics: readonly M06Diagnostic[] = [];
   private distillationGeneration = 0;
   private unregisterKnowledgeInvalidator?: () => void;
@@ -684,14 +697,14 @@ export class Chat2VaultView extends ItemView {
     const controller = this.knowledgeController;
     if (controller === undefined) return;
     this.distillationGeneration += 1;
-    this.knowledgeEditCandidateId = undefined;
+    this.knowledgeEditDraft = undefined;
     this.knowledgeEditDiagnostics = [];
     this.knowledgeWriteResult = undefined;
     if (!controller.installCandidates(candidates)) controller.invalidate();
   }
 
   private invalidateKnowledgeState(): void {
-    this.knowledgeEditCandidateId = undefined;
+    this.knowledgeEditDraft = undefined;
     this.knowledgeEditDiagnostics = [];
     this.knowledgeWriteResult = undefined;
     this.knowledgeController?.invalidate();
@@ -868,7 +881,14 @@ export class Chat2VaultView extends ItemView {
     const services = this.knowledgeServices;
     if (controller === undefined || services === undefined) return;
     const snapshot = controller.snapshot;
-    if (snapshot.candidates.length === 0) return;
+    if (
+      snapshot.candidates.length === 0 &&
+      this.knowledgeWriteResult === undefined
+    )
+      return;
+    const editBlocked =
+      this.knowledgeEditDraft?.dirty === true ||
+      this.knowledgeEditDraft?.invalid === true;
 
     const panel = parent.createEl("section", { cls: "c2v-knowledge-review" });
     panel.setAttr("aria-label", "Knowledge review and write");
@@ -876,9 +896,24 @@ export class Chat2VaultView extends ItemView {
     panel.createEl("p", {
       text: "Review validated candidates, select eligible notes, then run an exact dry-run before writing.",
     });
+    if (snapshot.candidates.length === 0) {
+      panel.createEl("p", {
+        cls: "c2v-knowledge-status-label",
+        text: "Review status: empty",
+      });
+      if (this.knowledgeWriteResult !== undefined)
+        this.drawKnowledgeLedger(panel, this.knowledgeWriteResult);
+      return;
+    }
     panel.createEl("p", {
       cls: "c2v-knowledge-status-label",
-      text: `Review status: ${snapshot.status}`,
+      text: `Review status: ${
+        this.knowledgeEditDraft?.invalid === true
+          ? "invalid edit"
+          : this.knowledgeEditDraft?.dirty === true
+            ? "unsaved edit"
+            : snapshot.status
+      }`,
     });
     const toolbar = panel.createDiv({ cls: "c2v-knowledge-toolbar" });
     const eligible = snapshot.candidates.filter(
@@ -891,6 +926,7 @@ export class Chat2VaultView extends ItemView {
     });
     selectAll.disabled =
       eligible.length === 0 ||
+      editBlocked ||
       snapshot.status === "previewing" ||
       snapshot.status === "writing";
 
@@ -908,8 +944,7 @@ export class Chat2VaultView extends ItemView {
       cls: "c2v-knowledge-candidates",
     });
     list.setAttr("aria-label", "Reviewed knowledge candidates");
-    for (const [index, candidate] of page.entries())
-      this.drawKnowledgeCandidate(list, candidate, index);
+    for (const candidate of page) this.drawKnowledgeCandidate(list, candidate);
     this.pager(list, this.distillationPage, pages, (next) => {
       this.distillationPage = next;
     });
@@ -956,6 +991,7 @@ export class Chat2VaultView extends ItemView {
       pending ||
       !platformEligible ||
       !rootReady ||
+      editBlocked ||
       selectedCount === 0 ||
       snapshot.status === "previewing" ||
       snapshot.status === "writing";
@@ -964,9 +1000,11 @@ export class Chat2VaultView extends ItemView {
     });
     write.setAttr("aria-label", "Write current ready knowledge plan");
     write.disabled =
-      snapshot.status !== "ready" || snapshot.plan?.status !== "ready";
+      editBlocked ||
+      snapshot.status !== "ready" ||
+      snapshot.plan?.status !== "ready";
 
-    if (snapshot.plan !== undefined) {
+    if (!editBlocked && snapshot.plan !== undefined) {
       const plan = panel.createEl("section", { cls: "c2v-knowledge-plan" });
       plan.setAttr("aria-label", "Exact knowledge dry-run");
       plan.createEl("h5", { text: "Exact dry-run" });
@@ -994,7 +1032,6 @@ export class Chat2VaultView extends ItemView {
   private drawKnowledgeCandidate(
     parent: HTMLElement,
     candidate: ReviewedKnowledgeCandidate,
-    index: number,
   ): void {
     const controller = this.knowledgeController;
     if (controller === undefined) return;
@@ -1033,22 +1070,47 @@ export class Chat2VaultView extends ItemView {
     ] as const) {
       const button = this.button(controls, label, () => {
         if (decision === "edited") {
-          this.knowledgeEditCandidateId = candidate.id;
+          this.knowledgeEditDraft = {
+            candidateId: candidate.id,
+            title: candidate.title,
+            summary: candidate.summary,
+            body: candidate.body,
+            tags: candidate.tags.join("\n"),
+            dirty: false,
+            invalid: false,
+          };
           this.knowledgeEditDiagnostics = [];
         } else {
           controller.decide(candidate.id, decision);
-          this.knowledgeEditCandidateId = undefined;
+          this.knowledgeEditDraft = undefined;
           this.knowledgeEditDiagnostics = [];
           this.knowledgeWriteResult = undefined;
         }
         this.draw(this.controller.snapshot);
+        this.focusKnowledgeControl(
+          candidate.id,
+          decision === "accepted"
+            ? "accept"
+            : decision === "rejected"
+              ? "reject"
+              : "edit-title",
+        );
       });
+      button.setAttr("data-c2v-knowledge-candidate", candidate.id);
+      button.setAttr(
+        "data-c2v-knowledge-control",
+        decision === "accepted"
+          ? "accept"
+          : decision === "rejected"
+            ? "reject"
+            : "edit",
+      );
       button.setAttr(
         "aria-pressed",
         String(
           decision === "edited"
             ? candidate.decision === "edited" ||
-                this.knowledgeEditCandidateId === candidate.id
+                this.knowledgeEditDraft?.candidateId === candidate.id
             : candidate.decision === decision,
         ),
       );
@@ -1065,60 +1127,73 @@ export class Chat2VaultView extends ItemView {
       "aria-label",
       `Select knowledge candidate ${candidate.title}`,
     );
+    selection.setAttr("data-c2v-knowledge-candidate", candidate.id);
+    selection.setAttr("data-c2v-knowledge-control", "selection");
     selection.addEventListener("change", () => {
       controller.select(candidate.id, selection.checked);
       this.knowledgeWriteResult = undefined;
       this.draw(this.controller.snapshot);
+      this.focusKnowledgeControl(candidate.id, "selection");
     });
     selectionLabel.createEl("span", { text: "Select for dry-run" });
 
-    if (this.knowledgeEditCandidateId === candidate.id)
-      this.drawKnowledgeEditor(item, candidate, index);
+    if (this.knowledgeEditDraft?.candidateId === candidate.id)
+      this.drawKnowledgeEditor(item, candidate);
   }
 
   private drawKnowledgeEditor(
     parent: HTMLElement,
     candidate: ReviewedKnowledgeCandidate,
-    index: number,
   ): void {
+    const draft = this.knowledgeEditDraft;
+    if (draft?.candidateId !== candidate.id) return;
     const editor = parent.createEl("section", { cls: "c2v-knowledge-editor" });
     editor.setAttr("aria-label", `Edit ${candidate.title}`);
     const title = this.knowledgeEditField(
       editor,
-      `c2v-knowledge-title-${String(index)}`,
       "Knowledge title",
       "input",
-      candidate.title,
+      draft.title,
       M04_TITLE_MAX_UTF16,
     ) as HTMLInputElement;
+    title.setAttr("data-c2v-knowledge-candidate", candidate.id);
+    title.setAttr("data-c2v-knowledge-control", "edit-title");
     const summary = this.knowledgeEditField(
       editor,
-      `c2v-knowledge-summary-${String(index)}`,
       "Knowledge summary",
       "textarea",
-      candidate.summary,
+      draft.summary,
       M04_SUMMARY_MAX_UTF16,
     ) as HTMLTextAreaElement;
     const body = this.knowledgeEditField(
       editor,
-      `c2v-knowledge-body-${String(index)}`,
       "Knowledge body",
       "textarea",
-      candidate.body,
+      draft.body,
       M04_BODY_MAX_UTF16,
     ) as HTMLTextAreaElement;
     const tags = this.knowledgeEditField(
       editor,
-      `c2v-knowledge-tags-${String(index)}`,
       "Knowledge tags, one per line",
       "textarea",
-      candidate.tags.join("\n"),
+      draft.tags,
       M04_MAX_SUGGESTED_TAGS * (M04_SUGGESTION_MAX_UTF16 + 1),
     ) as HTMLTextAreaElement;
+    const updateDraft = (): void => {
+      this.markKnowledgeEditDirty(candidate.id, {
+        title: title.value,
+        summary: summary.value,
+        body: body.value,
+        tags: tags.value,
+      });
+    };
+    for (const field of [title, summary, body, tags])
+      field.addEventListener("input", updateDraft);
     const actions = editor.createDiv({
       cls: "c2v-knowledge-candidate-actions",
     });
-    this.button(actions, "Save edit", () => {
+    const save = this.button(actions, "Save edit", () => {
+      updateDraft();
       const result = this.knowledgeController?.edit(candidate.id, {
         title: title.value,
         summary: summary.value,
@@ -1126,38 +1201,104 @@ export class Chat2VaultView extends ItemView {
         tags: tags.value === "" ? [] : tags.value.split("\n"),
       });
       if (result?.ok === true) {
-        this.knowledgeEditCandidateId = undefined;
+        this.knowledgeEditDraft = undefined;
         this.knowledgeEditDiagnostics = [];
         this.knowledgeWriteResult = undefined;
       } else if (result !== undefined) {
+        const current = this.knowledgeEditDraft;
+        if (current !== undefined)
+          this.knowledgeEditDraft = { ...current, invalid: true };
         this.knowledgeEditDiagnostics = result.diagnostics;
       }
       this.draw(this.controller.snapshot);
+      this.focusKnowledgeControl(
+        candidate.id,
+        result?.ok === true ? "edit" : "edit-title",
+      );
     });
-    this.button(actions, "Cancel edit", () => {
-      this.knowledgeEditCandidateId = undefined;
+    save.setAttr("data-c2v-knowledge-candidate", candidate.id);
+    save.setAttr("data-c2v-knowledge-control", "save-edit");
+    const cancel = this.button(actions, "Cancel edit", () => {
+      this.knowledgeEditDraft = undefined;
       this.knowledgeEditDiagnostics = [];
       this.draw(this.controller.snapshot);
+      this.focusKnowledgeControl(candidate.id, "edit");
     });
+    cancel.setAttr("data-c2v-knowledge-candidate", candidate.id);
+    cancel.setAttr("data-c2v-knowledge-control", "cancel-edit");
     this.drawKnowledgeDiagnostics(editor, this.knowledgeEditDiagnostics);
   }
 
   private knowledgeEditField(
     parent: HTMLElement,
-    id: string,
     labelText: string,
     kind: "input" | "textarea",
     value: string,
     maxLength: number,
   ): HTMLInputElement | HTMLTextAreaElement {
     const label = parent.createEl("label", { text: labelText });
-    label.htmlFor = id;
-    const field = parent.createEl(kind);
-    field.id = id;
+    const field = label.createEl(kind);
     field.value = value;
     field.maxLength = maxLength;
     field.setAttr("aria-label", labelText);
     return field;
+  }
+
+  private markKnowledgeEditDirty(
+    candidateId: string,
+    value: Pick<KnowledgeEditDraft, "title" | "summary" | "body" | "tags">,
+  ): void {
+    const draft = this.knowledgeEditDraft;
+    if (draft?.candidateId !== candidateId) return;
+    const firstMutation = !draft.dirty;
+    this.knowledgeEditDraft = {
+      ...draft,
+      ...value,
+      dirty: true,
+      invalid: false,
+    };
+    this.knowledgeEditDiagnostics = [];
+    this.knowledgeWriteResult = undefined;
+    if (firstMutation) {
+      const candidate = this.knowledgeController?.snapshot.candidates.find(
+        ({ id }) => id === candidateId,
+      );
+      if (candidate !== undefined)
+        this.knowledgeController?.select(candidateId, candidate.selected);
+    }
+    this.contentEl.querySelector(".c2v-knowledge-plan")?.remove();
+    this.contentEl.querySelector(".c2v-knowledge-ledger")?.remove();
+    this.contentEl
+      .querySelector(".c2v-knowledge-editor .c2v-knowledge-diagnostics")
+      ?.remove();
+    const dryRun = this.contentEl.querySelector<HTMLButtonElement>(
+      '[aria-label="Dry run selected knowledge candidates"]',
+    );
+    const write = this.contentEl.querySelector<HTMLButtonElement>(
+      '[aria-label="Write current ready knowledge plan"]',
+    );
+    if (dryRun !== null) dryRun.disabled = true;
+    if (write !== null) write.disabled = true;
+    const status = this.contentEl.querySelector<HTMLElement>(
+      ".c2v-knowledge-review > .c2v-knowledge-status-label",
+    );
+    if (status !== null) status.textContent = "Review status: unsaved edit";
+  }
+
+  private focusKnowledgeControl(
+    candidateId: string,
+    target: KnowledgeFocusTarget,
+  ): void {
+    const candidates = this.contentEl.querySelectorAll<HTMLElement>(
+      `[data-c2v-knowledge-control="${target}"]`,
+    );
+    for (const candidate of candidates)
+      if (
+        candidate.getAttribute("data-c2v-knowledge-candidate") === candidateId
+      ) {
+        candidate.focus();
+        return;
+      }
   }
 
   private drawKnowledgeDiagnostics(
@@ -1199,7 +1340,12 @@ export class Chat2VaultView extends ItemView {
 
   private async previewKnowledge(): Promise<void> {
     const controller = this.knowledgeController;
-    if (controller === undefined) return;
+    if (
+      controller === undefined ||
+      this.knowledgeEditDraft?.dirty === true ||
+      this.knowledgeEditDraft?.invalid === true
+    )
+      return;
     this.knowledgeWriteResult = undefined;
     const pending = controller.preview();
     this.draw(this.controller.snapshot);
@@ -1209,7 +1355,12 @@ export class Chat2VaultView extends ItemView {
 
   private async writeKnowledge(): Promise<void> {
     const controller = this.knowledgeController;
-    if (controller === undefined) return;
+    if (
+      controller === undefined ||
+      this.knowledgeEditDraft?.dirty === true ||
+      this.knowledgeEditDraft?.invalid === true
+    )
+      return;
     const pending = Promise.resolve(controller.write());
     this.draw(this.controller.snapshot);
     const result = await pending;
