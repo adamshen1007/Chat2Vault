@@ -1,13 +1,28 @@
-/* global Buffer */
+/* global Buffer, fetch */
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { gunzip } from "node:zlib";
 import process from "node:process";
 import { URL } from "node:url";
+import {
+  MINIMUM_OFFICIAL_DMG_URL,
+  STABLE_METADATA_URL,
+  canonicalJson,
+} from "./m06-runtime-provenance.mjs";
 
 const run = promisify(execFile);
+const decompress = promisify(gunzip);
 const pluginRoot = new URL("..", import.meta.url).pathname;
 const repositoryRoot = resolve(pluginRoot, "../..");
 const legacyHarness = join(pluginRoot, "scripts/check-m05-runtime.mjs");
@@ -27,6 +42,99 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+const exists = async (path) =>
+  access(path).then(
+    () => true,
+    () => false,
+  );
+
+async function download(url, destination) {
+  const partial = `${destination}.${randomUUID()}.partial`;
+  try {
+    await run("/usr/bin/curl", [
+      "--fail",
+      "--location",
+      "--proto",
+      "=https",
+      "--tlsv1.2",
+      "--silent",
+      "--show-error",
+      "--output",
+      partial,
+      url,
+    ]);
+    await rename(partial, destination);
+  } finally {
+    await rm(partial, { force: true });
+  }
+}
+
+async function prepareOfficialSources(directory) {
+  const cache = "/private/tmp/chat2vault-m06-official-1.7.4";
+  await mkdir(cache, { recursive: true });
+  const minimumDmg = join(cache, "Obsidian-1.7.4.dmg");
+  if (!(await exists(minimumDmg)))
+    await download(MINIMUM_OFFICIAL_DMG_URL, minimumDmg);
+  const dmgBytes = await readFile(minimumDmg);
+  if (dmgBytes.length < 1_000_000)
+    throw new Error("M06 minimum official DMG is incomplete");
+
+  const mount = join(directory, "minimum-dmg");
+  const minimumApp = join(directory, "official-minimum", "Obsidian.app");
+  await mkdir(mount, { recursive: true });
+  await mkdir(join(directory, "official-minimum"), { recursive: true });
+  let attached = false;
+  try {
+    await run("hdiutil", [
+      "attach",
+      "-readonly",
+      "-nobrowse",
+      "-mountpoint",
+      mount,
+      minimumDmg,
+    ]);
+    attached = true;
+    await run("/usr/bin/ditto", [join(mount, "Obsidian.app"), minimumApp]);
+  } finally {
+    if (attached) await run("hdiutil", ["detach", mount]);
+  }
+
+  const metadataResponse = await fetch(STABLE_METADATA_URL, {
+    cache: "no-store",
+    redirect: "error",
+  });
+  if (!metadataResponse.ok)
+    throw new Error(
+      `M06 stable metadata status ${String(metadataResponse.status)}`,
+    );
+  const metadata = JSON.parse(await metadataResponse.text());
+  const expectedAsset = `obsidian-${String(metadata.latestVersion)}.asar.gz`;
+  const stableUrl = new URL(String(metadata.downloadUrl));
+  if (
+    stableUrl.protocol !== "https:" ||
+    stableUrl.hostname !== "github.com" ||
+    !stableUrl.pathname.endsWith(
+      `/obsidianmd/obsidian-releases/releases/download/v${String(metadata.latestVersion)}/${expectedAsset}`,
+    )
+  )
+    throw new Error("M06 stable official asset URL invalid");
+  const stableDownload = join(directory, expectedAsset);
+  await download(stableUrl.href, stableDownload);
+  const compressed = await readFile(stableDownload);
+  const stableAsar = join(
+    directory,
+    `obsidian-${String(metadata.latestVersion)}.asar`,
+  );
+  await writeFile(stableAsar, await decompress(compressed));
+  return {
+    C2V_M05_OBSIDIAN_174_APP: minimumApp,
+    C2V_M05_OBSIDIAN_STABLE_ASAR: stableAsar,
+    C2V_M06_MINIMUM_DMG: minimumDmg,
+    C2V_M06_MINIMUM_DMG_URL: MINIMUM_OFFICIAL_DMG_URL,
+    C2V_M06_STABLE_DOWNLOAD: stableDownload,
+  };
+}
+
 function requestedRow() {
   const index = process.argv.indexOf("--row");
   const row = index < 0 ? undefined : process.argv[index + 1];
@@ -41,46 +149,8 @@ function replaceOnce(source, search, replacement, label) {
   return source.replace(search, replacement);
 }
 
-function m06ArtifactComparisonFunction() {
+function m06AcceptanceFunction() {
   return String.raw`
-function compareM06RuntimeArtifacts(production, runtime) {
-  const failures = [];
-  if (JSON.stringify(production.buildOptions) !== JSON.stringify(runtime.buildOptions))
-    failures.push("build option mismatch");
-  const normalizeInput = (record, input) =>
-    resolve(record.pluginRoot, input).slice(resolve(record.pluginRoot).length + 1).replaceAll("\\", "/");
-  const productionInputs = new Map(
-    Object.keys(production.metafile.inputs).map((input) => [normalizeInput(production, input), production.metafile.inputs[input].bytes]),
-  );
-  const runtimeInputs = new Map(
-    Object.keys(runtime.metafile.inputs).map((input) => [normalizeInput(runtime, input), runtime.metafile.inputs[input].bytes]),
-  );
-  const allowedRuntimeOnly = new Set([
-    "src/runtime-test-entry.ts",
-    "src/runtime-test-network-seam.ts",
-    "src/runtime-test-keychain.ts",
-    "src/runtime-test-m06.ts",
-  ]);
-  for (const [input, bytes] of productionInputs) {
-    if (!runtimeInputs.has(input)) failures.push("runtime graph omitted shared input " + input);
-    else if (runtimeInputs.get(input) !== bytes) failures.push("shared input byte mismatch " + input);
-  }
-  for (const input of runtimeInputs.keys())
-    if (!productionInputs.has(input) && !allowedRuntimeOnly.has(input))
-      failures.push("unexpected runtime-only input " + input);
-  for (const input of allowedRuntimeOnly)
-    if (!runtimeInputs.has(input)) failures.push("missing runtime-only input " + input);
-  if (!runtimeInputs.has("src/main.ts")) failures.push("runtime graph omitted production composition");
-  if (runtimeInputs.has("main.js")) failures.push("runtime graph imported generated production artifact");
-  return {
-    ok: failures.length === 0,
-    failures,
-    sharedInputCount: productionInputs.size,
-    runtimeOnlyInputs: [...allowedRuntimeOnly],
-    providerTransport: {},
-  };
-}
-
 function assertCompleteM06RuntimeRows(rows, expectedIdentity, requestedRow) {
   if (rows.length !== 1 || rows[0]?.id !== requestedRow)
     throw new Error("M06 runtime row selection incomplete");
@@ -94,7 +164,9 @@ function assertCompleteM06RuntimeRows(rows, expectedIdentity, requestedRow) {
     row.macos?.buildVersion !== expectedIdentity.macos.buildVersion
   ) throw new Error("M06 runtime identity mismatch");
   const evidence = row.m06;
+  const provenanceFailures = validateM06RuntimeProvenance(requestedRow, row.version, row.sourceMetadata);
   if (
+    provenanceFailures.length !== 0 ||
     JSON.stringify(evidence?.scenarioRegistry) !== JSON.stringify(${JSON.stringify(expectedScenarios)}) ||
     evidence?.scenarios?.length !== ${String(expectedScenarios.length)} ||
     evidence.scenarios.some((scenario) => scenario.outcome !== "success") ||
@@ -108,7 +180,15 @@ function assertCompleteM06RuntimeRows(rows, expectedIdentity, requestedRow) {
     evidence.counts?.providerCalls !== 0 ||
     evidence.privacy?.relativePathsOnly !== true ||
     evidence.privacy?.retainedContent !== false ||
-    row.mutationCount !== 4 ||
+    !Array.isArray(evidence.mutationAttempts) ||
+    evidence.mutationAttempts.length === 0 ||
+    evidence.mutationAttempts.some((attempt) =>
+      attempt.blocked !== false ||
+      attempt.path === "Sources/synthetic-source.md" ||
+      attempt.path.startsWith("/") ||
+      attempt.path.includes("..")
+    ) ||
+    row.mutationCount !== 3 ||
     row.persistenceViolationCount !== 0 ||
     row.networkAttemptCount !== 1 ||
     row.backgroundAttemptCount !== 0
@@ -129,7 +209,7 @@ function buildDriver(source, row) {
   driver = replaceOnce(
     driver,
     'import { compareM05RuntimeArtifacts } from "./compare-m05-runtime-artifact.mjs";\n',
-    "",
+    `import { compareM05RuntimeArtifacts } from ${JSON.stringify(new URL("./compare-m05-runtime-artifact.mjs", import.meta.url).href)};\nimport { validateM06RuntimeProvenance } from ${JSON.stringify(new URL("./m06-runtime-provenance.mjs", import.meta.url).href)};\n`,
     "legacy comparison import",
   );
   driver = replaceOnce(
@@ -144,46 +224,6 @@ function buildDriver(source, row) {
     'const root = await (await import("node:fs/promises")).realpath(await mkdtemp(join(tmpdir(), "chat2vault-m05-runtime-")));',
     "physical temporary vault root",
   );
-  driver = replaceOnce(
-    driver,
-    "const comparison = compareM05RuntimeArtifacts(production, runtime);",
-    "const comparison = compareM06RuntimeArtifacts(production, runtime);",
-    "artifact comparison",
-  );
-  driver = replaceOnce(
-    driver,
-    'const worker = await readFile(join(pluginRoot, "worker.js"), "utf8");',
-    `await esbuild.build({
-    absWorkingDir: pluginRoot,
-    bundle: true,
-    external: ["obsidian", "../native/source_observer.node"],
-    format: "cjs",
-    platform: "node",
-    target: "node20",
-    minify: true,
-    sourcemap: false,
-    logLevel: "silent",
-    metafile: true,
-    entryPoints: { worker: "src/worker.ts" },
-    outdir: directory,
-    entryNames: "worker",
-  });
-  const worker = await readFile(join(directory, "worker.js"), "utf8");`,
-    "fresh worker source",
-  );
-  driver = replaceOnce(
-    driver,
-    `if (
-    trackedMain.bytes !== production.artifact.bytes ||
-    trackedMain.sha256 !== production.artifact.sha256
-  )`,
-    `if (
-    !process.argv.includes("--artifacts-only") &&
-    (trackedMain.bytes !== production.artifact.bytes ||
-      trackedMain.sha256 !== production.artifact.sha256)
-  )`,
-    "generated production artifact requirement",
-  );
   const evidenceCall =
     /const evidence=await plugin\.runM05RuntimeScenarios\(\{port:[\s\S]*?secret:"synthetic-m05-credential"\}\);return\{/u;
   if (!evidenceCall.test(driver))
@@ -193,6 +233,12 @@ function buildDriver(source, row) {
   driver = driver.replace(
     evidenceCall,
     "const evidence=await plugin.runM06RuntimeScenarios();return{",
+  );
+  driver = replaceOnce(
+    driver,
+    'const mutationMethods=["create","createBinary","modify","modifyBinary","delete","rename"];',
+    'await plugin.prepareM06RuntimeVault();const mutationMethods=["create","createBinary","modify","modifyBinary","delete","rename"];',
+    "M06 fixture preparation before mutation accounting",
   );
   const legacyUiExercise =
     /hostUiEvidence = await exerciseAccessibilityAndZoom\([\s\S]*?markStage,\n {14}\);/u;
@@ -219,7 +265,7 @@ function buildDriver(source, row) {
     "    assertCompleteM06RuntimeRows(rows, { macos, officialStable }, requestedRow);",
     "row acceptance call",
   );
-  return `${driver}\n${m06ArtifactComparisonFunction()}`;
+  return `${driver}\n${m06AcceptanceFunction()}`;
 }
 
 function safeArtifact(value) {
@@ -251,18 +297,28 @@ function sanitizePacket(packet, rowId) {
         metadataSha256: row.officialStable?.metadataSha256,
         releaseAsset: row.officialStable?.releaseAsset,
         releaseHash: row.officialStable?.releaseHash,
+        metadataUrl: row.officialStable?.metadataUrl,
+        downloadUrl: row.officialStable?.downloadUrl,
+        metadata: safeArtifact(row.officialStable?.metadata),
       },
       sourceMetadata: {
         kind: row.sourceMetadata?.kind,
         appVersion: row.sourceMetadata?.appVersion,
         appInfoPlist: safeArtifact(row.sourceMetadata?.appInfoPlist),
         sourceFramework: safeArtifact(row.sourceMetadata?.sourceFramework),
+        downloadUrl: row.sourceMetadata?.downloadUrl,
+        download: safeArtifact(row.sourceMetadata?.download),
+        metadataUrl: row.sourceMetadata?.metadataUrl,
+        metadata: safeArtifact(row.sourceMetadata?.metadata),
+        releaseHash: row.sourceMetadata?.releaseHash,
+        codeSignature: row.sourceMetadata?.codeSignature,
         ...(row.sourceMetadata?.asar === undefined
           ? {}
           : { asar: safeArtifact(row.sourceMetadata.asar) }),
       },
       candidateHash: row.m06?.candidateHash,
       source: row.m06?.source,
+      mutationAttempts: row.m06?.mutationAttempts,
       knowledge: row.m06?.knowledge,
       counts: row.m06?.counts,
       privacy: row.m06?.privacy,
@@ -280,7 +336,7 @@ function sanitizePacket(packet, rowId) {
     ),
     runtimeArtifact: safeArtifact(packet.runtimeArtifact),
   };
-  const encoded = Buffer.from(JSON.stringify(sanitized));
+  const encoded = Buffer.from(canonicalJson(sanitized));
   return { ...sanitized, artifactHash: sha256(encoded) };
 }
 
@@ -292,6 +348,9 @@ const temporaryRoot = await mkdtemp(
 const driverPath = join(temporaryRoot, `check-m06-runtime-${randomUUID()}.mjs`);
 let failure;
 try {
+  const officialSourceEnv = artifactsOnly
+    ? {}
+    : await prepareOfficialSources(temporaryRoot);
   const legacySource = await readFile(legacyHarness, "utf8");
   await writeFile(driverPath, buildDriver(legacySource, row), { mode: 0o600 });
   const result = await run(
@@ -299,7 +358,7 @@ try {
     [driverPath, ...(artifactsOnly ? ["--artifacts-only"] : [])],
     {
       cwd: repositoryRoot,
-      env: process.env,
+      env: { ...process.env, ...officialSourceEnv },
       maxBuffer: 64 * 1024 * 1024,
     },
   );
@@ -320,6 +379,22 @@ try {
       .findLast((candidate) => candidate.startsWith('{"status":"PASS"'));
     if (line === undefined) throw new Error("M06 runtime packet missing");
     const sanitized = sanitizePacket(JSON.parse(line), row);
+    const evidenceIndex = process.argv.indexOf("--evidence-file");
+    const evidenceFile =
+      evidenceIndex < 0 ? undefined : process.argv[evidenceIndex + 1];
+    if (evidenceIndex >= 0 && evidenceFile === undefined)
+      throw new Error("--evidence-file requires a path");
+    if (evidenceFile !== undefined) {
+      const destination = resolve(evidenceFile);
+      await mkdir(resolve(destination, ".."), { recursive: true });
+      await writeFile(
+        destination,
+        canonicalJson({ ...sanitized, artifactHash: undefined }),
+        {
+          mode: 0o600,
+        },
+      );
+    }
     const text = JSON.stringify(sanitized);
     if (
       text.includes(repositoryRoot) ||

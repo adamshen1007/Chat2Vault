@@ -52,15 +52,26 @@ const browserNetworkNames = new Set([
   "sendBeacon",
 ]);
 const forbiddenVaultMutations = new Set([
+  "write",
+  "writeBinary",
+  "append",
+  "process",
   "modify",
   "modifyBinary",
+  "create",
+  "createBinary",
+  "createFolder",
   "rename",
   "delete",
+  "remove",
   "trash",
   "trashFile",
   "copy",
+  "mkdir",
+  "rmdir",
   "appendFile",
   "writeFile",
+  "rm",
   "unlink",
   "truncate",
 ]);
@@ -165,6 +176,13 @@ const pluginRecords = readdirSync(pluginSourceRoot)
 const knowledgePluginRecords = pluginRecords.filter((record) =>
   basename(record.file).startsWith("knowledge-"),
 );
+const adversarialIndex = process.argv.indexOf("--adversarial-file");
+if (adversarialIndex >= 0) {
+  const adversarialFile = process.argv[adversarialIndex + 1];
+  if (adversarialFile === undefined)
+    failures.push("--adversarial-file requires a path");
+  else knowledgePluginRecords.push(parse(adversarialFile));
+}
 const providerPluginRecords = pluginRecords.filter((record) =>
   ["provider-controller.ts", "provider-transport.ts", "keychain.ts"].includes(
     basename(record.file),
@@ -259,6 +277,96 @@ for (const record of providerPluginRecords) {
   visit(record.source);
 }
 
+function mutationAccess(node) {
+  if (ts.isPropertyAccessExpression(node))
+    return { receiver: node.expression, method: node.name.text };
+  if (ts.isElementAccessExpression(node)) {
+    const argument = node.argumentExpression;
+    return {
+      receiver: node.expression,
+      method:
+        argument !== undefined &&
+        (ts.isStringLiteral(argument) ||
+          ts.isNoSubstitutionTemplateLiteral(argument))
+          ? argument.text
+          : undefined,
+    };
+  }
+  return undefined;
+}
+
+function scanKnowledgeMutations(record) {
+  const name = basename(record.file);
+  const callableAliases = new Set();
+  const authorityAliases = new Set(["io", "vault", "adapter", "fileManager"]);
+  const authorityReceiver = (node) => {
+    const text = node.getText(record.source);
+    return (
+      authorityAliases.has(text) ||
+      /(?:^|[.#])(?:io|vault|adapter|fileManager)(?:$|\.|#|\[)/iu.test(text)
+    );
+  };
+  const allowedCreate = (call, access) =>
+    record.file === knowledgeAdapter.file &&
+    access.method === "create" &&
+    access.receiver.getText(record.source) === "this.#context.io" &&
+    call.expression.getText(record.source) === "this.#context.io.create";
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
+      if (ts.isIdentifier(node.name)) {
+        const access = mutationAccess(node.initializer);
+        if (
+          access !== undefined &&
+          (access.method === undefined ||
+            forbiddenVaultMutations.has(access.method)) &&
+          authorityReceiver(access.receiver)
+        )
+          callableAliases.add(node.name.text);
+        if (authorityReceiver(node.initializer))
+          authorityAliases.add(node.name.text);
+      } else if (
+        ts.isObjectBindingPattern(node.name) &&
+        authorityReceiver(node.initializer)
+      ) {
+        for (const element of node.name.elements) {
+          const method = propertyName(
+            element.propertyName ?? element.name,
+            record.source,
+          );
+          if (
+            method !== undefined &&
+            forbiddenVaultMutations.has(method) &&
+            ts.isIdentifier(element.name)
+          )
+            callableAliases.add(element.name.text);
+        }
+      }
+    }
+    if (ts.isCallExpression(node)) {
+      const access = mutationAccess(node.expression);
+      if (
+        access !== undefined &&
+        authorityReceiver(access.receiver) &&
+        (access.method === undefined ||
+          forbiddenVaultMutations.has(access.method)) &&
+        !allowedCreate(node, access)
+      )
+        failures.push(
+          `${name}: knowledge exposes mutation ${access.method ?? "computed"}`,
+        );
+      if (
+        ts.isIdentifier(node.expression) &&
+        callableAliases.has(node.expression.text)
+      )
+        failures.push(
+          `${name}: knowledge exposes aliased mutation ${node.expression.text}`,
+        );
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(record.source);
+}
+
 for (const record of [...knowledgePluginRecords, ...knowledgeCoreRecords]) {
   const name = basename(record.file);
   const visit = (node) => {
@@ -279,11 +387,6 @@ for (const record of [...knowledgePluginRecords, ...knowledgeCoreRecords]) {
     }
     if (ts.isIdentifier(node) && browserNetworkNames.has(node.text))
       failures.push(`${name}: knowledge reaches network API ${node.text}`);
-    if (
-      ts.isPropertyAccessExpression(node) &&
-      forbiddenVaultMutations.has(node.name.text)
-    )
-      failures.push(`${name}: knowledge exposes mutation ${node.name.text}`);
     if (
       ts.isIdentifier(node) &&
       [
@@ -309,6 +412,7 @@ for (const record of [...knowledgePluginRecords, ...knowledgeCoreRecords]) {
     ts.forEachChild(node, visit);
   };
   visit(record.source);
+  scanKnowledgeMutations(record);
 }
 
 const adapterCreateCalls = [];

@@ -1,65 +1,84 @@
 # Milestone 06 Runtime Gate Report
 
-Version: 0.1-candidate
+Version: 0.2-remediation-candidate
 
 Date: 2026-09-23
 
-Decision: **PASS — Task 7 commit ready; whole-M06 independent review remains pending**
+Decision: **PASS — Task 7 remediation is ready for a fresh independent R2 review; whole-M06 acceptance remains pending**
 
 ## Qualified candidate
 
-This report records the exact Task 7 capability boundary and two-row macOS x86_64 runtime qualification. It does not authorize publication, merge, deployment, release, Community Plugin submission, or M07 work.
+This report records the remediated M06 capability boundary and two-row macOS x86_64 runtime qualification. It does not authorize publication, merge, deployment, release, Community Plugin submission, or M07 work.
 
 - Repository: `Chat2Vault`
 - Branch: `codex/milestone-06-design`
-- Task 7 base/initial HEAD: `eb625490e48fca996d5b64bf8ef9f32fec985f42`
-- Base tree: `99217ecab7f1c6a49c54228cbfe8cbb472c47707`
-- Final commit/tree identity is recorded in the ignored Task 7 execution report after commit; embedding a commit's own hash in a tracked file is not possible.
+- Task 7 base: `eb625490e48fca996d5b64bf8ef9f32fec985f42`
+- Reviewed Task 7 commit/tree: `e585939e494cbdb5d8fbef536c5446c70615062e` / `e02e2684754d40f04b22f56da4993186ef57aace`
+- Remediation commit/tree: recorded in the ignored Task 7 execution report after commit; a tracked file cannot embed its own commit hash
 - Upstream: none configured
 - Host: macOS 15.7.9 (build 24G830), x86_64
 - Development runtime: Node.js 24.16.0; pnpm 11.7.0
-- Approved M06 design SHA-256: `5b1a89e02247750908477beb5b0837f0c5c97482608d3178c0093c3de963c0b4`
-- Task 7 brief SHA-256: `b8ca12c39b6bdbff685eed564f8bb300b4c3cd42480a9f38992a46c77627e3aa`
-- Approved implementation plan SHA-256: `05487a494df538e0e4588ae73d3818c4bde105f4d01247a22e4f4c1ff28fa7bd`
-- Production `main.js` SHA-256: `ab9d32ef8367094ca71182eb5c76dc6667253811b7c53d8f0fa20d4034599e02`
-- Runtime-only bundle SHA-256: `e5c287bc521b62d730b2c6b550eee8b54060af8f7ad6db215ee05ff31883b209`
 - Candidate input SHA-256: `bb95c304414b47a74ddd8f553484cf8723848b357283e62fc5d3982c82ec0c5c`
+- Qualified production `main.js` SHA-256: `ab9d32ef8367094ca71182eb5c76dc6667253811b7c53d8f0fa20d4034599e02`
+- Qualified worker SHA-256: `97d1e4f15d3e0600aaf554664075ba4469c96a6dbe5b89dcad65718777653735`
+- Qualified runtime-only bundle SHA-256: `b35f390e86ed14fa412a7fc9b7edd8d8f83599e26f364dd96ad960d3c76ab105`
 
-Both rows loaded byte-identical candidate and production artifacts. The runtime graph differs only by the approved runtime entry, network seam, Keychain seam, and M06 scenario seam. Generated production bundles were built for qualification and restored to their committed bytes before the Task 7 commit.
+Both rows used identical candidate, production bundle, worker, manifest, styles, and native artifacts. Generated bundles were built for qualification and restored to their committed bytes afterward.
 
-## Safety boundary
+## Remediated safety boundary
 
-The syntax-aware M06 checker parses TypeScript ASTs, so comments and inert substring matches cannot satisfy or violate the policy. It enforces:
+The aggregate `check:plugin` chain now retains every prior gate:
 
-- the exact provider service keys `buildRequest`, `current`, `onCandidatesChanged`, `parseResponse`, `readCredential`, `transport`, and `validateResult`;
-- the exact knowledge adapter capabilities `resolveKnowledgeSources`, `observeKnowledgeTarget`, `checkpointKnowledgeTarget`, `createKnowledgeNote`, and `readKnowledgeNote`;
-- no provider-to-knowledge, knowledge-to-provider/network, adapter modify/rename/delete, source-note mutation, production runtime-seam import, candidate-content logging, or candidate-content settings persistence;
-- one create-only adapter call, closed M06 diagnostics, settings-only `saveData`, one clipboard write, and the retained M04/M05 provider isolation constraints.
+1. general production import, filesystem, DOM, execution, manifest, dependency, and committed-bundle checks;
+2. worker smoke and M03 runtime contracts;
+3. the dedicated M04 core/plugin clipboard and manual-view boundary;
+4. M05 production boundaries and the SHA-per-input/provider-output-contribution runtime comparator;
+5. M06 capability, mutation, privacy, and artifact checks.
 
-The dynamic boundary tests prove dry-run and conflict paths make zero mutation, the writer receives no provider/network capability, source bytes remain unchanged, and a sentinel candidate body is absent from diagnostics, settings, and captured logs.
+The M06 checker parses TypeScript structure rather than comment substrings. It enforces the exact seven provider service keys and exact five knowledge adapter capabilities. Knowledge code cannot import provider/network/source-mutation authority. Every Vault/DataAdapter mutation form is denied, including direct, computed, aliased, and destructured calls for `write`, `writeBinary`, `append`, `process`, `modify`, `modifyBinary`, `create`, `createBinary`, `createFolder`, `delete`, `remove`, `rename`, `copy`, `trash`, `mkdir`, and `rmdir` variants. The sole production exception is the exact destination call `this.#context.io.create` in `ObsidianKnowledgeVaultAdapter`.
+
+The runtime-only ledger wraps both Vault and DataAdapter mutation APIs. It records surface, method, relative path, phase, and whether an attempt was blocked. Any source-path attempt fails before mutation and remains in the ledger even when the caller catches the failure. Adversarial tests cover direct, computed, alias, destructuring, and write-then-restore attempts. The synthetic source bytes flow through counted adapter reads and match byte-for-byte before and after execution.
+
+The runtime comparator hashes every shared input and verifies the exact provider-transport output contribution. It permits only the runtime entry, network seam, Keychain seam, M06 scenario seam, and M06 mutation-ledger seam. Byte-count equality alone cannot satisfy the gate.
+
+## Official host provenance
+
+The minimum row no longer relies on `Info.plist` version alone. The harness downloads the official DMG over HTTPS from the exact Obsidian release URL, retains its hash, mounts it read-only, and validates the unmodified app before instrumentation.
+
+| Minimum provenance field       | Value                                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------------------------- |
+| URL                            | `https://github.com/obsidianmd/obsidian-releases/releases/download/v1.7.4/Obsidian-1.7.4.dmg` |
+| DMG bytes / SHA-256            | 186,389,186 / `af77521f1df2ec1ce36d6609c17c325827934726b68cb31587357b356a510dbe`              |
+| Bundle version                 | `1.7.4`                                                                                       |
+| Identifier / team              | `md.obsidian` / `6JSW4SJWN9`                                                                  |
+| Leaf authority                 | `Developer ID Application: Dynalist Inc. (6JSW4SJWN9)`                                        |
+| Designated requirement SHA-256 | `832b427b2192b9b5ef5051dbfe06a0d41080c165dec1bba1c1b98eb83d2e0f1a`                            |
+| Gatekeeper assessment          | `accepted`; source `Notarized Developer ID`                                                   |
+
+The stable row resolves official metadata at execution time, validates its GitHub asset URL, hashes the downloaded compressed asset, and hashes the decompressed ASAR actually loaded by the host.
+
+| Stable provenance field        | Value                                                                                               |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| Exact version                  | `1.13.7`                                                                                            |
+| Metadata URL                   | `https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/desktop-releases.json`       |
+| Metadata bytes / SHA-256       | 1,219 / `cca9f6dfba8b2b9ee7747189eb3bc3697ffe98898cf9d3a4b736e685d4841112`                          |
+| Asset URL                      | `https://github.com/obsidianmd/obsidian-releases/releases/download/v1.13.7/obsidian-1.13.7.asar.gz` |
+| Compressed bytes / SHA-256     | 8,773,048 / `69253e39aa0b980e3cf96e9e8a8a4bed6b6481ef7021cd762f67872662d8d25a`                      |
+| Official metadata release hash | `aSU+OaoLmA48+W6eiopL7Wtkge9wIc12L2eHJmLY0lo=`                                                      |
+| ASAR bytes / SHA-256           | 25,787,463 / `a52a7daf1e2460bae03de80f2816604bd16a56cd374fbe5ce8d1a9ef5604059d`                     |
 
 ## Runtime matrix
 
-| Row     | Exact host identity                                                                 | Scenarios | Closed results                                             | Source hash                                                                     | Artifact packet                                                    | Result |
-| ------- | ----------------------------------------------------------------------------------- | --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------ |
-| Minimum | Obsidian 1.7.4; Electron 31.6.0; Chromium 126.0.6478.234; Node 20.17.0; darwin x64  | 9/9       | 2 created; 2 identical no-op; 1 conflict; provider delta 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` before/after | `242380f8e6b1be09b7b03b8dbe7e32b4f4e5520348fc13368d54693de9ddc322` | PASS   |
-| Stable  | Obsidian 1.13.7; Electron 39.8.3; Chromium 142.0.7444.265; Node 22.22.1; darwin x64 | 9/9       | 2 created; 2 identical no-op; 1 conflict; provider delta 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` before/after | `30e67804380fa49f88b0df9e61ce4f183a128e1ab15b9190c5f21e9f283ee730` | PASS   |
+| Row     | Exact host identity                                                                 | Scenarios | Closed results                                                                | Source SHA-256 before/after                                        | Canonical packet preimage                                                                                                                   | Result |
+| ------- | ----------------------------------------------------------------------------------- | --------: | ----------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| Minimum | Obsidian 1.7.4; Electron 31.6.0; Chromium 126.0.6478.234; Node 20.17.0; darwin x64  |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-minimum.json`](evidence/m06-runtime-minimum.json), SHA-256 `6fb495173311fd1327f95c76cdb4c7f14d5c9c6e83e417f1f21bc64e806d67d5` | PASS   |
+| Stable  | Obsidian 1.13.7; Electron 39.8.3; Chromium 142.0.7444.265; Node 22.22.1; darwin x64 |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-stable.json`](evidence/m06-runtime-stable.json), SHA-256 `c1c03a142e674210d4b73d8b6a94200c077d8a75acceef440c152e4472ca1f0c`   | PASS   |
 
-The official stable metadata resolved during both executions to Obsidian 1.13.7. Its metadata was 1,219 bytes with SHA-256 `cca9f6dfba8b2b9ee7747189eb3bc3697ffe98898cf9d3a4b736e685d4841112`; the selected asset was `obsidian-1.13.7.asar.gz`, and the decompressed ASAR SHA-256 was `a52a7daf1e2460bae03de80f2816604bd16a56cd374fbe5ce8d1a9ef5604059d`.
-
-The identical retained knowledge evidence in both rows was:
-
-| Synthetic relative path                                     | Status          | SHA-256                                                            |
-| ----------------------------------------------------------- | --------------- | ------------------------------------------------------------------ |
-| `Knowledge/Synthetic edited runtime title--c9ac8ed3a692.md` | created         | `0ec7be9d691bdf119cc77b87bd73b8c779c798371787e67b63b7f3d143b18588` |
-| `Knowledge/Synthetic runtime title 1--a4e2e375959f.md`      | created         | `4edf0cc2eced96c6015511badf3e5bc4ce8eb14313f74af0190eb4a7fc7498e7` |
-| `Knowledge/Synthetic edited runtime title--c9ac8ed3a692.md` | identical-no-op | `0ec7be9d691bdf119cc77b87bd73b8c779c798371787e67b63b7f3d143b18588` |
-| `Knowledge/Synthetic runtime title 1--a4e2e375959f.md`      | identical-no-op | `4edf0cc2eced96c6015511badf3e5bc4ce8eb14313f74af0190eb4a7fc7498e7` |
-| `Knowledge/Synthetic runtime title 3--019816a233ca.md`      | conflict        | `c0bc8a1b49d08ce156003b729b8ee9eb6502dc2ab31b2c313c94da3a36c6881c` |
+The canonical JSON files are the exact sanitized packet preimages. Running `shasum -a 256` on each file reproduces the table values. They contain no trailing bytes outside the canonical JSON.
 
 ## Exact scenario ledger
 
-All nine scenario IDs returned `success` in both rows:
+Both rows returned `success` for exactly these IDs, in order:
 
 1. `review-accept-edit-reject`
 2. `multi-select-dry-run`
@@ -71,58 +90,70 @@ All nine scenario IDs returned `success` in both rows:
 8. `source-note-unchanged`
 9. `provider-not-called`
 
-The sequence used one synthetic source note and three synthetic candidates through the production view, controller, executor, and `ObsidianKnowledgeVaultAdapter`. UI controls performed accept, bounded edit/save, reject, selection, dry-run, invalidation, re-preview, write, retry, and conflict refusal. The created notes contained the trusted source backlink. The source note retained the same exact byte hash before and after every action.
+The unchanged production view, controller, executor, and `ObsidianKnowledgeVaultAdapter` operated on one synthetic source note and three synthetic candidates. Source-fixture creation occurs before mutation accounting. Each row then observed three harness-level Vault mutations: two authorized knowledge creates and one conflict-fixture create. The finer runtime ledger observed both Vault and adapter calls; every source-path attempt count was zero. Dry-run, stale-plan refusal, identical retry, and production conflict handling added zero writer mutation.
 
-Each row observed four total harness-level Vault mutations: the synthetic source fixture create, two authorized knowledge creates, and one deliberate conflict-fixture create. Dry-run, stale-plan refusal, no-op retry, and production conflict handling added zero mutation. Each row also observed one attributed M05 setup provider request before the M06 provider baseline, zero M06 provider-call delta, zero background request, and zero settings-persistence attempt.
+The retained knowledge evidence is identical in both rows:
+
+| Synthetic relative path                                     | Status                    | SHA-256                                                            |
+| ----------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------ |
+| `Knowledge/Synthetic edited runtime title--c9ac8ed3a692.md` | created / identical-no-op | `0ec7be9d691bdf119cc77b87bd73b8c779c798371787e67b63b7f3d143b18588` |
+| `Knowledge/Synthetic runtime title 1--a4e2e375959f.md`      | created / identical-no-op | `4edf0cc2eced96c6015511badf3e5bc4ce8eb14313f74af0190eb4a7fc7498e7` |
+| `Knowledge/Synthetic runtime title 3--019816a233ca.md`      | conflict                  | `c0bc8a1b49d08ce156003b729b8ee9eb6502dc2ab31b2c313c94da3a36c6881c` |
 
 ## Artifact identity
 
 | Artifact                       |   Bytes | SHA-256                                                            |
 | ------------------------------ | ------: | ------------------------------------------------------------------ |
-| `main.js`                      | 234,883 | `ab9d32ef8367094ca71182eb5c76dc6667253811b7c53d8f0fa20d4034599e02` |
-| `worker.js`                    |  19,397 | `97d1e4f15d3e0600aaf554664075ba4469c96a6dbe5b89dcad65718777653735` |
+| qualified `main.js`            | 234,883 | `ab9d32ef8367094ca71182eb5c76dc6667253811b7c53d8f0fa20d4034599e02` |
+| qualified `worker.js`          |  19,397 | `97d1e4f15d3e0600aaf554664075ba4469c96a6dbe5b89dcad65718777653735` |
 | `manifest.json`                |     251 | `e5fb0e963c510919e4206bbb5d873d75813f1e3d40bbe6e41a2d8fb5a242dfd9` |
 | `styles.css`                   |   6,911 | `f89ce612b62c0f0dffdf9c0884e246a26791634e49c8eb94b2e8c188426afce3` |
 | `native/source_observer.node`  |  41,352 | `ce334cb2dae22bb803bb0b9e5ef0b44b2359795e53b19c4852e837bfb04418f5` |
 | `native/keychain.node`         |  66,376 | `3751f72aa872aa3baae527d3242df2f1750f8c6e13fc91b4ca1b6aad70459c1a` |
-| runtime-only `runtime-test.js` | 274,309 | `e5c287bc521b62d730b2c6b550eee8b54060af8f7ad6db215ee05ff31883b209` |
+| runtime-only `runtime-test.js` | 276,016 | `b35f390e86ed14fa412a7fc9b7edd8d8f83599e26f364dd96ad960d3c76ab105` |
 
 ## Verification ledger
 
-| Command                                                                                  | Result                                                                                                    |
-| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m06-boundaries.test.ts`  | PASS: 1 file, 6 tests                                                                                     |
-| `pnpm check:m06`                                                                         | PASS: syntax-aware boundary plus 7/7 dynamic/contract tests                                               |
-| `pnpm check:m06:runtime -- --artifacts-only`                                             | PASS: production/runtime graph identity and approved seam delta                                           |
-| `C2V_M05_OBSIDIAN_174_APP=<official-1.7.4-copy> pnpm check:m06:runtime -- --row minimum` | PASS: Obsidian 1.7.4, all 9 scenarios                                                                     |
-| `C2V_M05_OBSIDIAN_174_APP=<official-1.7.4-copy> pnpm check:m06:runtime -- --row stable`  | PASS: official current stable 1.13.7, all 9 scenarios                                                     |
-| `pnpm --filter @chat2vault/obsidian-plugin typecheck`                                    | PASS: `tsc --noEmit`                                                                                      |
-| `pnpm --filter @chat2vault/obsidian-plugin build`                                        | PASS: native modules, worker, and production bundle; existing Security-framework deprecation warning only |
-| `pnpm check:plugin`                                                                      | PASS: worker, M03 contracts, retained M05 boundary, M06 boundary, and M06 artifact identity               |
-| `pnpm --filter @chat2vault/obsidian-plugin test`                                         | PASS: 27 files, 627 tests                                                                                 |
-| `pnpm lint`                                                                              | PASS: full repository, zero findings                                                                      |
-| `pnpm exec prettier --check <Task-7-owned files>`                                        | PASS: all Task 7 files formatted                                                                          |
-| `pnpm format:check`                                                                      | Pre-existing baseline remains red only for ignored Task 1–6 briefs/reports and the Task 7 brief           |
+| Command                                                                                                                                                                                                                                                               | Result                                                                                   |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Focused RED run for four remediation suites                                                                                                                                                                                                                           | RED: 4 failed suites; 8 failed and 9 passed tests, reproducing all three review findings |
+| `pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m04-boundaries.test.ts test/m05-boundaries.test.ts test/m06-boundaries.test.ts test/runtime-artifact-comparator.test.ts test/m06-runtime-mutation-ledger.test.ts test/m06-runtime-provenance.test.ts` | PASS: 6 files, 38 tests                                                                  |
+| `pnpm check:m06`                                                                                                                                                                                                                                                      | PASS: AST boundary plus 14 M06 tests                                                     |
+| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row minimum --evidence-file docs/evidence/m06-runtime-minimum.json`                                                                                                                                        | PASS: official Obsidian 1.7.4, 9/9                                                       |
+| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row stable --evidence-file docs/evidence/m06-runtime-stable.json`                                                                                                                                          | PASS: official current stable 1.13.7, 9/9                                                |
+| `pnpm typecheck`                                                                                                                                                                                                                                                      | PASS: core and plugin                                                                    |
+| `pnpm lint`                                                                                                                                                                                                                                                           | PASS: full repository                                                                    |
+| `pnpm test`                                                                                                                                                                                                                                                           | PASS: core 304 tests and plugin 644 tests                                                |
+| `pnpm build`                                                                                                                                                                                                                                                          | PASS: core and plugin; existing Security-framework deprecation warning only              |
+| Generated-bundle restore followed by `pnpm check:plugin`                                                                                                                                                                                                              | PASS: full general/M03/M04/M05/M06 clean-state chain                                     |
+| `shasum -a 256 docs/evidence/m06-runtime-{minimum,stable}.json`                                                                                                                                                                                                       | PASS: exact packet hashes reproduced                                                     |
 
-## Failures and remediation
+## Failure and remediation ledger
 
-The first minimum-row launch found that the inherited M05 harness supplied the temporary vault through macOS's `/var` symlink. The production native observer intentionally uses `FSOPT_NOFOLLOW_ANY`, so it returned `indeterminate` and the writer failed closed with `KNOWLEDGE_SOURCE_STALE`. The M06 wrapper now canonicalizes only the disposable harness root with `realpath` before Obsidian launch. This is not a production fallback and does not alter native, adapter, controller, or UI behavior.
+1. Independent R2 review found that the aggregate gate omitted general/M04/M05 artifact checks. The full prior chain is restored, with narrow exact M06 exceptions and adversarial retention tests.
+2. Independent R2 review found static and dynamic source-mutation blind spots. The checker now covers all Vault/DataAdapter mutation forms and aliases; the runtime wraps both surfaces and fails source attempts before execution.
+3. Independent R2 review found minimum provenance relied on `Info.plist`. Minimum now binds an authenticated official DMG hash and notarized signing identity; stable binds official metadata, compressed download, and loaded ASAR identities. Canonical tracked preimages make packet hashes independently reproducible.
+4. The first fresh DMG extraction used APFS clone copying across the mounted image and failed with `Cross-device link`. Replacing only that extraction step with `ditto` preserved the signed app and passed validation.
+5. The first real-row retry correctly stopped on a stale tracked generated bundle. A full plugin build established the qualified bundle identity; both rows then used it, and generated files were restored afterward.
+6. Initial canonical files had a trailing newline, so file hashes differed from preimage hashes. The writer now emits exact canonical bytes, and both rows were rerun.
+7. Self-review found the first designated-requirement hash included a disposable executable path because `codesign` split output across streams. Parsing is now restricted to the `designated =>` line; the deterministic hash above was produced by the final minimum-first execution.
 
-The first clean-check after generated-bundle restoration found that the inherited artifact-only path still consumed stale committed `worker.js` and required stale committed `main.js` to equal a fresh source build. The M06 wrapper now compiles the worker into its disposable directory for both sides of the comparison and omits only the tracked-`main.js` equality assertion in `--artifacts-only` mode. Real runtime rows retain that assertion. A seventh boundary regression test locks this clean-state contract; final clean-state `pnpm check:plugin` reproduces the exact qualified production/runtime hashes.
+No macOS TCC prompt or human-only blocker remained.
 
-The first successful scenario execution was then followed by an unrelated inherited M05 host-focus/zoom exercise. Task 7 does not claim M05 accessibility or zoom evidence, so the transformed M06 driver no longer invokes that legacy exercise. It still uses the existing real-Obsidian launch, trust, instrumentation, artifact, cleanup, network, and mutation harness.
+## Privacy and scope review
 
-No macOS TCC prompt or human-only action remained. The initial cached 1.7.4 application was incomplete, so a fresh official 1.7.4 DMG was downloaded, mounted read-only, copied to a disposable location, validated as version 1.7.4, and used for the minimum row.
+All runtime data was synthetic. Retained evidence contains exact software/provenance and artifact identities, scenario IDs, relative paths, closed statuses/counts, mutation method names, phases, and hashes only. It contains no candidate/source content, prompt, response, credential, username, machine name, vault name, absolute path, real export, or screenshot. Privacy scans reject `/Users/`, repository/private temporary paths, the sentinel, and the inert credential.
 
-## Privacy and synthetic-data review
+The remediation changed only authorized Task 7 files plus the narrowly permitted prior gate/comparator/harness surfaces. Added files outside the original seven-file Task 7 scope are explicitly:
 
-All vault data was authored synthetic data. Retained evidence contains only scenario IDs, closed outcomes, counts, SHA-256 values, exact software identities, artifact identities, and synthetic vault-relative paths. The harness rejects repository paths, `/Users/` paths, the candidate sentinel, and non-relative retained knowledge paths. It retains no candidate content, source content, prompt, response, credential, username, machine name, vault name, absolute path, real export, or screenshot. Disposable vaults, profiles, host copies, certificates, and Keychains are removed in `finally` paths.
+- `apps/obsidian-plugin/scripts/m06-runtime-provenance.mjs`
+- `apps/obsidian-plugin/src/runtime-test-mutation-ledger.ts`
+- `apps/obsidian-plugin/test/m06-runtime-mutation-ledger.test.ts`
+- `apps/obsidian-plugin/test/m06-runtime-provenance.test.ts`
+- `apps/obsidian-plugin/test/runtime-artifact-comparator.test.ts`
+- `docs/evidence/m06-runtime-minimum.json`
+- `docs/evidence/m06-runtime-stable.json`
 
-## Scope, limitations, and decision
+Narrow existing pre-M06 surfaces modified to preserve prior guarantees are `check-plugin.mjs`, `check-m04-boundaries.mjs`, `check-m05-runtime.mjs`, and `compare-m05-runtime-artifact.mjs`. Provider, core, knowledge production behavior, native code, dependencies, lockfile, README/index/Task 8 documents, generated committed artifacts, and M07 remain unchanged.
 
-- Task 7 changes only the authorized boundary/runtime scripts and tests, runtime-only entry/seam, root scripts, and this report.
-- Provider, core, knowledge production behavior, native code, committed generated bundles, README/index/Task 8 documents, and M07 remain unchanged.
-- Qualification is macOS x86_64 only. It makes no Apple Silicon, Windows, Linux, mobile, IPv6, real-provider, release, or deployment claim.
-- Green Task 7 gates are evidence, not whole-milestone authority. Independent R2 whole-candidate review remains Task 8.
-
-The Task 7 safety and two-row runtime gate is **PASS**. The bounded Task 7 candidate is **GO for its authorized local commit**. Whole-M06 acceptance and any publication remain **NO-GO pending Task 8 independent review and separate authorization**.
+The Task 7 remediation candidate is **GO for its authorized local commit and fresh independent R2 review**. Whole-M06 acceptance, publication, and M07 remain **NO-GO** until separate authorization.

@@ -65,10 +65,12 @@ async function collectAuthorityEvidence() {
 }
 
 async function resolveOfficialStableMetadata() {
-  const response = await fetch(
-    "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/desktop-releases.json",
-    { cache: "no-store", redirect: "error" },
-  );
+  const metadataUrl =
+    "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/desktop-releases.json";
+  const response = await fetch(metadataUrl, {
+    cache: "no-store",
+    redirect: "error",
+  });
   if (!response.ok)
     throw new Error(
       `M05_RUNTIME_HOST_BLOCKED: official stable metadata status ${String(response.status)}`,
@@ -99,7 +101,13 @@ async function resolveOfficialStableMetadata() {
   return {
     sourceRepository: "obsidianmd/obsidian-releases",
     sourceFile: "desktop-releases.json",
-    fetchedAt: new Date().toISOString(),
+    metadataUrl,
+    downloadUrl: parsed.downloadUrl,
+    metadata: {
+      file: "desktop-releases.json",
+      bytes: bytes.length,
+      sha256: sha256(bytes),
+    },
     metadataBytes: bytes.length,
     metadataSha256: sha256(bytes),
     latestVersion: parsed.latestVersion,
@@ -118,7 +126,54 @@ async function collectMacosIdentity() {
   return { productVersion, buildVersion };
 }
 
-async function collectObsidianSourceMetadata(row) {
+async function collectCodeSignature(appPath) {
+  const details = await run("codesign", ["-dv", "--verbose=4", appPath]);
+  const text = `${details.stdout}\n${details.stderr}`;
+  const value = (key) =>
+    new RegExp(`^${key}=(.+)$`, "mu").exec(text)?.[1]?.trim();
+  const authorities = [...text.matchAll(/^Authority=(.+)$/gmu)].map((match) =>
+    match[1]?.trim(),
+  );
+  const requirementResult = await run("codesign", ["-dr", "-", appPath]);
+  const requirementText = `${requirementResult.stdout}\n${requirementResult.stderr}`;
+  const requirement =
+    /^designated => (.+)$/mu.exec(requirementText)?.[1]?.trim() ?? "";
+  if (requirement === "")
+    throw new Error("M05 runtime designated requirement unavailable");
+  let assessment = "rejected";
+  let assessmentSource = "unavailable";
+  try {
+    const assessed = await run("spctl", [
+      "-a",
+      "-vv",
+      "--type",
+      "execute",
+      appPath,
+    ]);
+    const assessmentText = `${assessed.stdout}\n${assessed.stderr}`;
+    assessment = assessmentText.includes("accepted") ? "accepted" : "rejected";
+    assessmentSource =
+      /^source=(.+)$/mu.exec(assessmentText)?.[1]?.trim() ??
+      (assessmentText.includes("security disabled")
+        ? "security-disabled"
+        : "unavailable");
+  } catch (error) {
+    const assessmentText = `${error?.stdout ?? ""}\n${error?.stderr ?? ""}`;
+    assessment = assessmentText.includes("accepted") ? "accepted" : "rejected";
+    assessmentSource =
+      /^source=(.+)$/mu.exec(assessmentText)?.[1]?.trim() ?? "unavailable";
+  }
+  return {
+    identifier: value("Identifier"),
+    teamIdentifier: value("TeamIdentifier"),
+    authorities,
+    designatedRequirementSha256: sha256(Buffer.from(requirement)),
+    assessment,
+    assessmentSource,
+  };
+}
+
+async function collectObsidianSourceMetadata(row, officialStable) {
   const infoPlist = join(row.sourceApp, "Contents/Info.plist");
   const appVersion = (
     await run("/usr/bin/plutil", [
@@ -139,12 +194,47 @@ async function collectObsidianSourceMetadata(row) {
     appInfoPlist: await artifact(infoPlist),
     sourceFramework: row.hostInstrumentation.sourceFramework,
   };
+  if (row.id === "minimum") {
+    const downloadPath = process.env.C2V_M06_MINIMUM_DMG;
+    if (downloadPath !== undefined) {
+      source.kind = "official-dmg";
+      source.downloadUrl = process.env.C2V_M06_MINIMUM_DMG_URL;
+      source.download = await artifact(downloadPath);
+      source.codeSignature = await collectCodeSignature(row.sourceApp);
+    }
+  }
+  if (row.id === "stable") {
+    const downloadPath = process.env.C2V_M06_STABLE_DOWNLOAD;
+    if (downloadPath !== undefined) {
+      source.kind = "official-stable-asar";
+      source.metadataUrl = officialStable.metadataUrl;
+      source.metadata = officialStable.metadata;
+      source.downloadUrl = officialStable.downloadUrl;
+      source.releaseHash = officialStable.releaseHash;
+      source.download = await artifact(downloadPath);
+    }
+  }
   if (row.asarPath !== undefined) source.asar = await artifact(row.asarPath);
   return source;
 }
 
 async function buildEvidence(directory) {
-  const worker = await readFile(join(pluginRoot, "worker.js"), "utf8");
+  await esbuild.build({
+    absWorkingDir: pluginRoot,
+    bundle: true,
+    external: ["obsidian", "../native/source_observer.node"],
+    format: "cjs",
+    platform: "node",
+    target: "node20",
+    minify: true,
+    sourcemap: false,
+    logLevel: "silent",
+    metafile: true,
+    entryPoints: { worker: "src/worker.ts" },
+    outdir: directory,
+    entryNames: "worker",
+  });
+  const worker = await readFile(join(directory, "worker.js"), "utf8");
   const buildOptions = {
     bundle: true,
     external: ["obsidian", "../native/source_observer.node"],
@@ -184,8 +274,9 @@ async function buildEvidence(directory) {
   if (!comparison.ok) throw new Error(comparison.failures.join("; "));
   const trackedMain = await artifact(join(pluginRoot, "main.js"));
   if (
-    trackedMain.bytes !== production.artifact.bytes ||
-    trackedMain.sha256 !== production.artifact.sha256
+    !process.argv.includes("--artifacts-only") &&
+    (trackedMain.bytes !== production.artifact.bytes ||
+      trackedMain.sha256 !== production.artifact.sha256)
   )
     throw new Error(
       "tracked main.js does not match the final production build",
@@ -1763,7 +1854,10 @@ try {
         authorities,
         macos,
         officialStable,
-        sourceMetadata: await collectObsidianSourceMetadata(rowInput),
+        sourceMetadata: await collectObsidianSourceMetadata(
+          rowInput,
+          officialStable,
+        ),
       };
       const result = await runRow(row, shared);
       result.authorities = row.authorities;

@@ -133,7 +133,12 @@ for (const file of files) {
         "href",
         "src",
         "srcset",
-      ].includes(node.name.text)
+      ].includes(node.name.text) &&
+      !(
+        basename(file) === "view.ts" &&
+        node.name.text === "write" &&
+        node.expression.getText(source) === "controller"
+      )
     )
       failures.push(`${file}: forbidden property ${node.name.text}`);
     if (ts.isPropertyAccessExpression(node)) {
@@ -155,7 +160,10 @@ for (const file of files) {
           (fileName === "source-vault-adapter.ts" &&
             ["create", "createFolder"].includes(node.name.text)) ||
           (fileName === "source-executor.ts" &&
-            node.name.text === "createFolder");
+            node.name.text === "createFolder") ||
+          (fileName === "knowledge-vault-adapter.ts" &&
+            node.name.text === "create" &&
+            node.expression.getText(source) === "this.#context.io");
         if (!allowed)
           failures.push(`${file}: forbidden vault mutation ${node.name.text}`);
       }

@@ -38,6 +38,7 @@ import { configureNativeObserver } from "./native-observer.js";
 import { ObsidianKnowledgeVaultAdapter } from "./knowledge-vault-adapter.js";
 import { createObsidianSourceVaultIO } from "./source-vault-adapter.js";
 import {
+  prepareM06RuntimeVault,
   runM06RuntimeScenarios,
   type M06RuntimeEvidence,
 } from "./runtime-test-m06.js";
@@ -295,6 +296,10 @@ export default class M05RuntimePlugin extends Plugin {
     if (!(view instanceof Chat2VaultView))
       return Promise.reject(new Error("M06 runtime view unavailable"));
     return runM06RuntimeScenarios(this.app, view, () => this.providerCalls);
+  }
+
+  public prepareM06RuntimeVault(): Promise<void> {
+    return prepareM06RuntimeVault(this.app);
   }
 }
 

@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/require-await -- synthetic async boundaries model vault I/O. */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
@@ -58,9 +60,12 @@ function source(): ResolvedKnowledgeSource {
 function controllerHarness(observation: "absent" | "conflict" = "absent") {
   const sourceBytes = new TextEncoder().encode("synthetic source bytes\n");
   const initialSourceBytes = new Uint8Array(sourceBytes);
-  const noteBytes = new Map<string, Uint8Array>();
+  const noteBytes = new Map<string, Uint8Array>([
+    [source().sourceNotePath, sourceBytes],
+  ]);
   const effects = {
     create: 0,
+    sourceReads: 0,
     sourceMutation: 0,
     provider: 0,
     network: 0,
@@ -68,7 +73,14 @@ function controllerHarness(observation: "absent" | "conflict" = "absent") {
     logs: [] as unknown[][],
   };
   const adapter: KnowledgeVaultAdapter = {
-    resolveKnowledgeSources: async () => ({ ok: true, sources: [source()] }),
+    resolveKnowledgeSources: async () => {
+      const resolved = source();
+      const bytes = noteBytes.get(resolved.sourceNotePath);
+      if (bytes === undefined) throw new Error("missing synthetic source note");
+      effects.sourceReads += 1;
+      expect(new TextDecoder().decode(bytes)).toBe("synthetic source bytes\n");
+      return { ok: true, sources: [resolved] };
+    },
     observeKnowledgeTarget: async (path) => {
       if (observation === "conflict")
         return {
@@ -85,6 +97,10 @@ function controllerHarness(observation: "absent" | "conflict" = "absent") {
       resolvedPath: path,
     }),
     createKnowledgeNote: async (path, content) => {
+      if (path === source().sourceNotePath) {
+        effects.sourceMutation += 1;
+        throw new Error("source mutation prohibited");
+      }
       effects.create += 1;
       noteBytes.set(path, new TextEncoder().encode(content));
     },
@@ -229,15 +245,94 @@ describe("M06 capability and privacy boundary", () => {
 
   it("keeps clean-check artifact validation independent of restored generated bundles", () => {
     const runner = readFileSync(
-      join(pluginRoot, "scripts/check-m06-runtime.mjs"),
+      join(pluginRoot, "scripts/check-m05-runtime.mjs"),
       "utf8",
     );
     expect(runner).toContain('!process.argv.includes("--artifacts-only") &&');
-    expect(runner).toContain('"generated production artifact requirement"');
-    expect(runner).toContain('"fresh worker source"');
+    expect(runner).toContain('entryPoints: { worker: "src/worker.ts" }');
     expect(runner).toContain(
       'const worker = await readFile(join(directory, "worker.js"), "utf8");',
     );
+  });
+
+  it("retains the general, M04, M05, and M06 aggregate gate paths", () => {
+    const scripts = (
+      JSON.parse(
+        readFileSync(join(repositoryRoot, "package.json"), "utf8"),
+      ) as { scripts: Record<string, string> }
+    ).scripts;
+    const aggregate = scripts["check:plugin"] ?? "";
+    for (const command of [
+      "check-plugin.mjs",
+      "check-m04-boundaries.mjs",
+      "check-m05-boundaries.mjs",
+      "check-m05-runtime.mjs --artifacts-only",
+      "check-m06-boundaries.mjs",
+      "check-m06-runtime.mjs --artifacts-only",
+    ])
+      expect(aggregate).toContain(command);
+    for (const checkerName of ["check-plugin.mjs", "check-m04-boundaries.mjs"])
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [join(pluginRoot, "scripts", checkerName)],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).not.toThrow();
+  });
+
+  it("uses the SHA inventory and provider contribution comparator for M06", () => {
+    const runner = readFileSync(
+      join(pluginRoot, "scripts/check-m06-runtime.mjs"),
+      "utf8",
+    );
+    expect(runner).toContain("compareM05RuntimeArtifacts");
+    expect(runner).not.toContain("m06ArtifactComparisonFunction");
+    expect(runner).not.toContain("providerTransport: {}");
+  });
+
+  it.each([
+    ["direct write", 'io.write("Sources/synthetic-source.md", "changed")'],
+    [
+      "computed write",
+      'io["writeBinary"]("Sources/synthetic-source.md", bytes)',
+    ],
+    [
+      "aliased modify",
+      "const restore = io.modify; restore(sourceFile, original)",
+    ],
+    [
+      "destructured rename",
+      "const { rename } = adapter; rename(sourceFile, target)",
+    ],
+    ["dynamic computed call", "io[method](sourcePath, original)"],
+  ])("rejects adversarial %s mutation authority", async (_name, statement) => {
+    const directory = await mkdtemp(join(tmpdir(), "c2v-m06-boundary-"));
+    const fixture = join(directory, "knowledge-adversary.ts");
+    await writeFile(
+      fixture,
+      `export function adversary(io: any, adapter: any, sourceFile: any, sourcePath: string, target: string, original: Uint8Array, bytes: Uint8Array, method: string) { ${statement}; }`,
+      "utf8",
+    );
+    try {
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [checker, "--adversarial-file", fixture],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("keeps dry-run and conflict paths at zero mutation", async () => {
@@ -250,6 +345,7 @@ describe("M06 capability and privacy boundary", () => {
       expect(result.status).toBe("planned");
       expect(fixture.effects.create).toBe(0);
       expect(fixture.effects.sourceMutation).toBe(0);
+      expect(fixture.effects.sourceReads).toBeGreaterThan(0);
       expect(fixture.sourceBytes).toEqual(fixture.initialSourceBytes);
     }
   });
@@ -275,6 +371,7 @@ describe("M06 capability and privacy boundary", () => {
       expect(fixture.effects.create).toBe(1);
       expect(fixture.effects.provider).toBe(0);
       expect(fixture.effects.network).toBe(0);
+      expect(fixture.effects.sourceReads).toBeGreaterThan(0);
       expect(forbidden).not.toHaveBeenCalled();
       expect(fixture.sourceBytes).toEqual(fixture.initialSourceBytes);
     } finally {
