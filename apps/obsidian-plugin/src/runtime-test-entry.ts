@@ -7,8 +7,12 @@ import {
 } from "@chat2vault/core";
 import { Agent } from "node:https";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import { Plugin } from "obsidian";
-import ProductionPlugin from "./main.js";
+import ProductionPlugin, {
+  resolveNativePluginDirectory,
+  sourceWriterPlatformEligible,
+} from "./main.js";
 import { ImportController } from "./controller.js";
 import { VIEW_TYPE, Chat2VaultView } from "./view.js";
 import { sendOpenAICompatibleRequest } from "./provider-transport.js";
@@ -20,7 +24,7 @@ import {
   DEFAULT_PROVIDER_SETTINGS,
   readSettings,
   SettingsController,
-  type Chat2VaultSettingsV3,
+  type Chat2VaultSettingsV4,
   type ProviderSettings,
 } from "./settings-model.js";
 import { Chat2VaultSettingTab } from "./settings.js";
@@ -29,6 +33,14 @@ import {
   M05_RUNTIME_HOST,
 } from "./runtime-test-network-seam.js";
 import { runRuntimeKeychainLifecycle } from "./runtime-test-keychain.js";
+import { createDesktopNativeAdapter } from "./containment.js";
+import { configureNativeObserver } from "./native-observer.js";
+import { ObsidianKnowledgeVaultAdapter } from "./knowledge-vault-adapter.js";
+import { createObsidianSourceVaultIO } from "./source-vault-adapter.js";
+import {
+  runM06RuntimeScenarios,
+  type M06RuntimeEvidence,
+} from "./runtime-test-m06.js";
 
 export interface M05RuntimeInput {
   port: number;
@@ -91,11 +103,15 @@ export default class M05RuntimePlugin extends Plugin {
     Promise.resolve(parseChatGptExport(files)),
   );
   private invalidator: ((reason: "selection-change") => void) | undefined;
-  public override settings: Chat2VaultSettingsV3 = {
-    schemaVersion: 3,
+  private knowledgeInvalidator:
+    ((reason: "settings" | "unload") => void) | undefined;
+  private providerCalls = 0;
+  public override settings: Chat2VaultSettingsV4 = {
+    schemaVersion: 4,
     installationId: "44444444-4444-4444-8444-444444444444",
     previewMessagesPerPage: 25,
-    sourceRoot: "",
+    sourceRoot: "Sources",
+    knowledgeRoot: "Knowledge",
     provider: {
       endpoint: `https://${M05_RUNTIME_HOST}:${String(runtimePort)}/v1/chat/completions`,
       model: "synthetic-m05-model",
@@ -111,51 +127,92 @@ export default class M05RuntimePlugin extends Plugin {
   private readonly stateObservers = new Set<() => void>();
 
   public override onload(): void {
-    this.registerView(
-      VIEW_TYPE,
-      (leaf) =>
-        new Chat2VaultView(
-          leaf,
-          this.controller,
-          () => 25,
-          undefined,
-          { writeClipboard: () => Promise.resolve() },
-          {
-            current: () => ({
-              platformEligible:
-                process.platform === "darwin" && process.arch === "x64",
-              unsupportedFutureSettings: false,
-              identityState: "authoritative",
-              credentialState: "configured",
-              credentialOperationInProgress: false,
-              providerSettingsSaving: false,
-              cloudDisclosureAccepted: true,
-              pluginGeneration: 1,
-              providerSettingsGeneration: 1,
-              providerSaveGeneration: 1,
-              credentialGeneration: 1,
-              config: config(runtimePort),
-            }),
-            readCredential: () => ({ ok: true, secret: runtimeSecret }),
-            transport: (input) =>
-              sendOpenAICompatibleRequest(
-                input,
-                createRuntimeNetworkDependencies(),
-              ),
-            observeCredentialOnViewOpen: () => ({
-              ok: true,
-              status: "configured",
-            }),
-            registerInvalidator: (invalidator) => {
-              this.invalidator = invalidator;
-              return () => {
-                if (this.invalidator === invalidator)
-                  this.invalidator = undefined;
-              };
-            },
+    this.registerView(VIEW_TYPE, (leaf) => {
+      const io = createObsidianSourceVaultIO(this.app);
+      const pluginDirectory = resolveNativePluginDirectory(
+        this.manifest.dir,
+        this.app.vault.configDir,
+        this.manifest.id,
+      );
+      const nativeConfigured =
+        io.basePath !== "" &&
+        pluginDirectory !== undefined &&
+        configureNativeObserver(
+          join(
+            io.basePath,
+            ...pluginDirectory.split("/"),
+            "native",
+            "source_observer.node",
+          ),
+        );
+      const knowledgeAdapter = new ObsidianKnowledgeVaultAdapter(
+        io,
+        nativeConfigured ? createDesktopNativeAdapter() : undefined,
+        () => this.settings.sourceRoot,
+        () => this.settings.knowledgeRoot,
+        process.platform,
+        process.arch,
+      );
+      return new Chat2VaultView(
+        leaf,
+        this.controller,
+        () => 25,
+        undefined,
+        { writeClipboard: () => Promise.resolve() },
+        {
+          current: () => ({
+            platformEligible:
+              process.platform === "darwin" && process.arch === "x64",
+            unsupportedFutureSettings: false,
+            identityState: "authoritative",
+            credentialState: "configured",
+            credentialOperationInProgress: false,
+            providerSettingsSaving: false,
+            cloudDisclosureAccepted: true,
+            pluginGeneration: 1,
+            providerSettingsGeneration: 1,
+            providerSaveGeneration: 1,
+            credentialGeneration: 1,
+            config: config(runtimePort),
+          }),
+          readCredential: () => ({ ok: true, secret: runtimeSecret }),
+          transport: (input) => {
+            this.providerCalls += 1;
+            return sendOpenAICompatibleRequest(
+              input,
+              createRuntimeNetworkDependencies(),
+            );
           },
-        ),
-    );
+          observeCredentialOnViewOpen: () => ({
+            ok: true,
+            status: "configured",
+          }),
+          registerInvalidator: (invalidator) => {
+            this.invalidator = invalidator;
+            return () => {
+              if (this.invalidator === invalidator)
+                this.invalidator = undefined;
+            };
+          },
+        },
+        {
+          sourceRoot: () => this.settings.sourceRoot,
+          knowledgeRoot: () => this.settings.knowledgeRoot,
+          knowledgeRootPending: () => false,
+          settingsGeneration: () => 1,
+          knowledgeWriterPlatformEligible: () =>
+            sourceWriterPlatformEligible(process.platform, process.arch),
+          adapter: knowledgeAdapter,
+          registerInvalidator: (invalidator) => {
+            this.knowledgeInvalidator = invalidator;
+            return () => {
+              if (this.knowledgeInvalidator === invalidator)
+                this.knowledgeInvalidator = undefined;
+            };
+          },
+        },
+      );
+    });
     this.addCommand({
       id: "import-chatgpt-export",
       name: "Import ChatGPT export",
@@ -166,6 +223,7 @@ export default class M05RuntimePlugin extends Plugin {
 
   public override onunload(): void {
     this.invalidator?.("selection-change");
+    this.knowledgeInvalidator?.("unload");
     this.controller.close();
     this.stateObservers.clear();
   }
@@ -174,6 +232,9 @@ export default class M05RuntimePlugin extends Plugin {
     return Promise.resolve({ status: "unchanged" });
   }
   public saveSourceRoot(): Promise<{ status: "unchanged" }> {
+    return Promise.resolve({ status: "unchanged" });
+  }
+  public saveKnowledgeRoot(): Promise<{ status: "unchanged" }> {
     return Promise.resolve({ status: "unchanged" });
   }
   public setProviderDraft(draft: ProviderSettings): void {
@@ -227,6 +288,13 @@ export default class M05RuntimePlugin extends Plugin {
     input: M05RuntimeInput,
   ): Promise<M05RuntimeEvidence> {
     return runM05RuntimeScenarios(input);
+  }
+
+  public runM06RuntimeScenarios(): Promise<M06RuntimeEvidence> {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (!(view instanceof Chat2VaultView))
+      return Promise.reject(new Error("M06 runtime view unavailable"));
+    return runM06RuntimeScenarios(this.app, view, () => this.providerCalls);
   }
 }
 

@@ -10,7 +10,9 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "check:plugin": "node apps/obsidian-plugin/scripts/check-plugin.mjs && node apps/obsidian-plugin/scripts/check-worker.mjs && node apps/obsidian-plugin/scripts/check-m03-runtime-contracts.mjs && node apps/obsidian-plugin/scripts/check-m04-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m05-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m05-runtime.mjs",
+    "check:m06": "node apps/obsidian-plugin/scripts/check-m06-boundaries.mjs && pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m06-boundaries.test.ts",
+    "check:m06:runtime": "node apps/obsidian-plugin/scripts/check-m06-runtime.mjs",
+    "check:plugin": "node apps/obsidian-plugin/scripts/check-worker.mjs && node apps/obsidian-plugin/scripts/check-m03-runtime-contracts.mjs && node apps/obsidian-plugin/scripts/check-m05-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m06-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --artifacts-only",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "pnpm -r test",
