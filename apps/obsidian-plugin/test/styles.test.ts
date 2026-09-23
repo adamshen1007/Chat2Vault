@@ -42,4 +42,27 @@ describe("preview performance styles", () => {
       /\.c2v-provider-actions\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s,
     );
   });
+
+  it("gives the scoped M06 review UI visible focus, 44px controls, narrow stacking, and code overflow", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(styles).toMatch(
+      /\.c2v-knowledge-review[^}]*:focus-visible\s*\{[^}]*outline:\s*2px solid/s,
+    );
+    expect(styles).toMatch(
+      /\.c2v-knowledge-review\s+(?:button|input|select|textarea)[^{]*\{[^}]*min-height:\s*44px;/s,
+    );
+    expect(styles).toMatch(
+      /\.c2v-knowledge-plan pre\s*\{[^}]*max-height:[^;}]+;[^}]*overflow:\s*auto;[^}]*white-space:\s*pre;/s,
+    );
+    expect(styles).toMatch(
+      /\.c2v-knowledge-status-label\s*\{[^}]*font-weight:/s,
+    );
+    expect(styles).toMatch(
+      /@container\s*\(max-width:\s*480px\)[\s\S]*\.c2v-knowledge-candidate-actions\s*\{[^}]*flex-direction:\s*column;/s,
+    );
+  });
 });

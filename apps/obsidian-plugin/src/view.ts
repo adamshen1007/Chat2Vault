@@ -1,10 +1,20 @@
 import {
+  M04_BODY_MAX_UTF16,
   M04_CONTRACT_VERSION,
+  M04_MAX_SUGGESTED_TAGS,
   M04_RESULT_MAX_UTF8_BYTES,
+  M04_SUGGESTION_MAX_UTF16,
+  M04_SUMMARY_MAX_UTF16,
+  M04_TITLE_MAX_UTF16,
+  normalizeSourceRoot,
+  pathCollisionKey,
   sourceWriterDiagnostic,
   type CanonicalConversation,
   type CanonicalMessage,
   type ImportDiagnostic,
+  type M06Diagnostic,
+  type PreviewCandidate,
+  type ReviewedKnowledgeCandidate,
   type SourceDescriptor,
 } from "@chat2vault/core";
 import { ItemView, WorkspaceLeaf } from "obsidian";
@@ -48,6 +58,9 @@ import {
   type ProviderCurrent,
   type ProviderInvalidationReason,
 } from "./provider-controller.js";
+import { KnowledgeController } from "./knowledge-controller.js";
+import type { KnowledgeVaultAdapter } from "./knowledge-vault-adapter.js";
+import type { KnowledgeWriteExecutionResult } from "./knowledge-executor.js";
 
 export const VIEW_TYPE = "chat-to-vault-preview";
 
@@ -74,7 +87,7 @@ export interface ManualDistillationViewServices extends Pick<
 
 export interface ProviderViewServices extends Omit<
   ProviderControllerServices,
-  "current"
+  "current" | "onCandidatesChanged"
 > {
   current(): Partial<ProviderCurrent> &
     Pick<
@@ -95,6 +108,35 @@ export interface ProviderViewServices extends Omit<
     invalidator: (reason: ProviderInvalidationReason) => void,
   ): () => void;
   registerStateObserver?(observer: () => void): () => void;
+}
+
+export interface KnowledgeViewServices {
+  sourceRoot(): string;
+  knowledgeRoot(): string;
+  knowledgeRootPending(): boolean;
+  settingsGeneration(): number;
+  knowledgeWriterPlatformEligible(): boolean;
+  adapter: KnowledgeVaultAdapter;
+  registerInvalidator(
+    invalidator: (reason: "settings" | "unload") => void,
+  ): () => void;
+}
+
+function knowledgeRootsReady(
+  sourceRoot: string,
+  knowledgeRoot: string,
+): boolean {
+  const source = normalizeSourceRoot(sourceRoot);
+  const knowledge = normalizeSourceRoot(knowledgeRoot);
+  if (source.status !== "configured" || knowledge.status !== "configured")
+    return false;
+  const sourceKey = pathCollisionKey(source.sourceRoot);
+  const knowledgeKey = pathCollisionKey(knowledge.sourceRoot);
+  return (
+    sourceKey !== knowledgeKey &&
+    !sourceKey.startsWith(`${knowledgeKey}/`) &&
+    !knowledgeKey.startsWith(`${sourceKey}/`)
+  );
 }
 
 export class Chat2VaultView extends ItemView {
@@ -127,6 +169,12 @@ export class Chat2VaultView extends ItemView {
   private unregisterProviderInvalidator?: () => void;
   private unregisterProviderStateObserver?: () => void;
   private readonly providerStatusRegion: HTMLParagraphElement;
+  private knowledgeController?: KnowledgeController;
+  private knowledgeWriteResult: KnowledgeWriteExecutionResult | undefined;
+  private knowledgeEditCandidateId: string | undefined;
+  private knowledgeEditDiagnostics: readonly M06Diagnostic[] = [];
+  private distillationGeneration = 0;
+  private unregisterKnowledgeInvalidator?: () => void;
   public constructor(
     leaf: WorkspaceLeaf,
     private readonly controller: ImportController,
@@ -134,6 +182,7 @@ export class Chat2VaultView extends ItemView {
     private readonly sourceServices?: SourceViewServices,
     distillationServices?: ManualDistillationViewServices,
     providerServices?: ProviderViewServices,
+    private readonly knowledgeServices?: KnowledgeViewServices,
   ) {
     super(leaf);
     this.providerStatusRegion = this.contentEl.ownerDocument.createElement("p");
@@ -195,6 +244,27 @@ export class Chat2VaultView extends ItemView {
         },
       );
     }
+    if (knowledgeServices !== undefined) {
+      this.knowledgeController = new KnowledgeController({
+        current: () => ({
+          loaded: this.loaded,
+          lifecycleGeneration: this.viewGeneration,
+          importGeneration: this.importGeneration,
+          selectionGeneration: this.selectionGeneration,
+          distillationGeneration: this.distillationGeneration,
+          knowledgeSettingsGeneration: knowledgeServices.settingsGeneration(),
+          sourceRoot: knowledgeServices.sourceRoot(),
+          knowledgeRoot: knowledgeServices.knowledgeRoot(),
+        }),
+        adapter: knowledgeServices.adapter,
+      });
+      this.unregisterKnowledgeInvalidator =
+        knowledgeServices.registerInvalidator((reason) => {
+          if (reason === "unload") this.loaded = false;
+          this.invalidateKnowledgeState();
+          if (this.loaded) this.draw(this.controller.snapshot);
+        });
+    }
     if (distillationServices !== undefined) {
       this.distillationController = new ManualDistillationController({
         current: () => ({
@@ -206,6 +276,8 @@ export class Chat2VaultView extends ItemView {
             : { conversation: this.selected }),
         }),
         writeClipboard: (text) => distillationServices.writeClipboard(text),
+        onCandidatesChanged: (candidates) =>
+          this.installKnowledgeCandidates(candidates),
         ...(distillationServices.buildRequest === undefined
           ? {}
           : { buildRequest: distillationServices.buildRequest }),
@@ -229,6 +301,8 @@ export class Chat2VaultView extends ItemView {
       this.providerController = new ProviderController({
         ...providerServices,
         current: () => this.providerCurrent(),
+        onCandidatesChanged: (candidates) =>
+          this.installKnowledgeCandidates(candidates),
       });
       this.unregisterProviderInvalidator = providerServices.registerInvalidator(
         (reason) => {
@@ -272,10 +346,12 @@ export class Chat2VaultView extends ItemView {
     this.providerController?.invalidate("view-close");
     this.invalidateSourceState();
     this.invalidateDistillation(true, true);
+    this.invalidateKnowledgeState();
     this.unregisterSourceInvalidator?.();
     this.unregisterDistillationInvalidator?.();
     this.unregisterProviderInvalidator?.();
     this.unregisterProviderStateObserver?.();
+    this.unregisterKnowledgeInvalidator?.();
     this.unsubscribe?.();
     this.controller.close();
     this.contentEl.ondragover = null;
@@ -349,6 +425,7 @@ export class Chat2VaultView extends ItemView {
         this.providerController?.invalidate("import-replacement");
       this.invalidateSourceState();
       if (stateChanged) this.invalidateDistillation(false, true);
+      if (stateChanged) this.invalidateKnowledgeState();
       this.selected = undefined;
       this.query = "";
       this.conversationPage = 1;
@@ -388,6 +465,7 @@ export class Chat2VaultView extends ItemView {
       this.providerController?.invalidate("import-clear");
       this.invalidateSourceState();
       this.invalidateDistillation(true, true);
+      this.invalidateKnowledgeState();
       this.selected = undefined;
       this.query = "";
       this.conversationPage = 1;
@@ -485,6 +563,7 @@ export class Chat2VaultView extends ItemView {
         this.providerController?.invalidate("selection-change");
         this.selected = undefined;
         this.invalidateDistillation(true, false);
+        this.invalidateKnowledgeState();
       }
       this.draw(this.controller.snapshot);
       const target = selectionCleared
@@ -524,6 +603,7 @@ export class Chat2VaultView extends ItemView {
           this.providerController?.invalidate("selection-change");
           this.invalidateSourceState();
           this.invalidateDistillation(true, false);
+          this.invalidateKnowledgeState();
         }
         this.selected = conversation;
         this.messagePage = 1;
@@ -596,6 +676,25 @@ export class Chat2VaultView extends ItemView {
     if (importChanged) this.importGeneration += 1;
     this.distillationPage = 1;
     this.distillationController?.invalidate();
+  }
+
+  private installKnowledgeCandidates(
+    candidates: readonly PreviewCandidate[],
+  ): void {
+    const controller = this.knowledgeController;
+    if (controller === undefined) return;
+    this.distillationGeneration += 1;
+    this.knowledgeEditCandidateId = undefined;
+    this.knowledgeEditDiagnostics = [];
+    this.knowledgeWriteResult = undefined;
+    if (!controller.installCandidates(candidates)) controller.invalidate();
+  }
+
+  private invalidateKnowledgeState(): void {
+    this.knowledgeEditCandidateId = undefined;
+    this.knowledgeEditDiagnostics = [];
+    this.knowledgeWriteResult = undefined;
+    this.knowledgeController?.invalidate();
   }
 
   private drawManualDistillation(parent: HTMLElement): void {
@@ -699,6 +798,10 @@ export class Chat2VaultView extends ItemView {
   }
 
   private drawWinningCandidates(parent: HTMLElement): void {
+    if (this.knowledgeController !== undefined) {
+      this.drawKnowledgeReview(parent);
+      return;
+    }
     const providerCandidates =
       this.providerController?.snapshot.candidates ?? [];
     const candidates =
@@ -758,6 +861,361 @@ export class Chat2VaultView extends ItemView {
     this.pager(list, this.distillationPage, pages, (next) => {
       this.distillationPage = next;
     });
+  }
+
+  private drawKnowledgeReview(parent: HTMLElement): void {
+    const controller = this.knowledgeController;
+    const services = this.knowledgeServices;
+    if (controller === undefined || services === undefined) return;
+    const snapshot = controller.snapshot;
+    if (snapshot.candidates.length === 0) return;
+
+    const panel = parent.createEl("section", { cls: "c2v-knowledge-review" });
+    panel.setAttr("aria-label", "Knowledge review and write");
+    panel.createEl("h4", { text: "Knowledge review" });
+    panel.createEl("p", {
+      text: "Review validated candidates, select eligible notes, then run an exact dry-run before writing.",
+    });
+    panel.createEl("p", {
+      cls: "c2v-knowledge-status-label",
+      text: `Review status: ${snapshot.status}`,
+    });
+    const toolbar = panel.createDiv({ cls: "c2v-knowledge-toolbar" });
+    const eligible = snapshot.candidates.filter(
+      ({ decision }) => decision === "accepted" || decision === "edited",
+    );
+    const selectAll = this.button(toolbar, "Select all eligible", () => {
+      controller.selectAllEligible(true);
+      this.knowledgeWriteResult = undefined;
+      this.draw(this.controller.snapshot);
+    });
+    selectAll.disabled =
+      eligible.length === 0 ||
+      snapshot.status === "previewing" ||
+      snapshot.status === "writing";
+
+    const pages = distillationPageCount(
+      snapshot.candidates.length,
+      this.distillationPageSize,
+    );
+    this.distillationPage = Math.min(this.distillationPage, pages);
+    const page = distillationPage(
+      snapshot.candidates,
+      this.distillationPage,
+      this.distillationPageSize,
+    );
+    const list = panel.createEl("section", {
+      cls: "c2v-knowledge-candidates",
+    });
+    list.setAttr("aria-label", "Reviewed knowledge candidates");
+    for (const [index, candidate] of page.entries())
+      this.drawKnowledgeCandidate(list, candidate, index);
+    this.pager(list, this.distillationPage, pages, (next) => {
+      this.distillationPage = next;
+    });
+
+    const selectedCount = snapshot.candidates.filter(
+      ({ decision, selected }) =>
+        selected && (decision === "accepted" || decision === "edited"),
+    ).length;
+    const rootReady = knowledgeRootsReady(
+      services.sourceRoot(),
+      services.knowledgeRoot(),
+    );
+    const pending = services.knowledgeRootPending();
+    const platformEligible = services.knowledgeWriterPlatformEligible();
+    panel.createEl("p", {
+      text:
+        services.knowledgeRoot() === ""
+          ? "Knowledge folder: not configured"
+          : `Knowledge folder: ${services.knowledgeRoot()}`,
+    });
+    if (pending)
+      panel.createEl("p", {
+        cls: "c2v-error",
+        text: "The knowledge folder setting is still being saved.",
+      });
+    if (!platformEligible)
+      panel.createEl("p", {
+        cls: "c2v-error",
+        text: "Knowledge writing is not qualified on this platform in M06.",
+      });
+    if (!rootReady && services.knowledgeRoot() !== "")
+      panel.createEl("p", {
+        cls: "c2v-error",
+        text: "The source and knowledge folders must be valid and non-overlapping.",
+      });
+
+    const actions = panel.createDiv({ cls: "c2v-knowledge-actions" });
+    const dryRun = this.button(actions, "Dry run", () => {
+      void this.previewKnowledge();
+    });
+    dryRun.setAttr("aria-label", "Dry run selected knowledge candidates");
+    dryRun.disabled =
+      !this.loaded ||
+      pending ||
+      !platformEligible ||
+      !rootReady ||
+      selectedCount === 0 ||
+      snapshot.status === "previewing" ||
+      snapshot.status === "writing";
+    const write = this.button(actions, "Write", () => {
+      void this.writeKnowledge();
+    });
+    write.setAttr("aria-label", "Write current ready knowledge plan");
+    write.disabled =
+      snapshot.status !== "ready" || snapshot.plan?.status !== "ready";
+
+    if (snapshot.plan !== undefined) {
+      const plan = panel.createEl("section", { cls: "c2v-knowledge-plan" });
+      plan.setAttr("aria-label", "Exact knowledge dry-run");
+      plan.createEl("h5", { text: "Exact dry-run" });
+      plan.createEl("p", {
+        text: `Selected candidates: ${String(snapshot.plan.entries.length)}`,
+      });
+      for (const entry of snapshot.plan.entries) {
+        const item = plan.createEl("article", {
+          cls: "c2v-knowledge-plan-entry",
+        });
+        item.createEl("p", { text: `Target path: ${entry.targetPath}` });
+        item.createEl("p", {
+          cls: "c2v-knowledge-status-label",
+          text: `Action: ${entry.action}`,
+        });
+        const code = item.createEl("pre").createEl("code");
+        code.textContent = entry.noteContent;
+      }
+    }
+    this.drawKnowledgeDiagnostics(panel, snapshot.diagnostics);
+    if (this.knowledgeWriteResult !== undefined)
+      this.drawKnowledgeLedger(panel, this.knowledgeWriteResult);
+  }
+
+  private drawKnowledgeCandidate(
+    parent: HTMLElement,
+    candidate: ReviewedKnowledgeCandidate,
+    index: number,
+  ): void {
+    const controller = this.knowledgeController;
+    if (controller === undefined) return;
+    const item = parent.createEl("article", {
+      cls: "c2v-knowledge-candidate",
+    });
+    item.createEl("h5", { text: candidate.title });
+    item.createEl("p", {
+      cls: "c2v-knowledge-status-label",
+      text: `Decision: ${candidate.decision}`,
+    });
+    item.createEl("p", { text: `Type: ${candidate.type}` });
+    item.createEl("p", { text: `Confidence: ${candidate.confidence}` });
+    item.createEl("p", {
+      text: `Provenance: ${candidate.sourceRefs
+        .map(
+          (source) =>
+            `${source.provider} (${String(source.messageFingerprints.length)} messages)`,
+        )
+        .join(", ")}`,
+    });
+    item.createEl("p", { text: candidate.summary });
+    const body = item.createEl("pre").createEl("code");
+    body.textContent = candidate.body;
+    item.createEl("p", {
+      text: `Tags: ${candidate.tags.join(", ") || "none"}`,
+    });
+
+    const controls = item.createDiv({ cls: "c2v-knowledge-candidate-actions" });
+    controls.setAttr("role", "group");
+    controls.setAttr("aria-label", `Decision for ${candidate.title}`);
+    for (const [label, decision] of [
+      ["Accept", "accepted"],
+      ["Edit", "edited"],
+      ["Reject", "rejected"],
+    ] as const) {
+      const button = this.button(controls, label, () => {
+        if (decision === "edited") {
+          this.knowledgeEditCandidateId = candidate.id;
+          this.knowledgeEditDiagnostics = [];
+        } else {
+          controller.decide(candidate.id, decision);
+          this.knowledgeEditCandidateId = undefined;
+          this.knowledgeEditDiagnostics = [];
+          this.knowledgeWriteResult = undefined;
+        }
+        this.draw(this.controller.snapshot);
+      });
+      button.setAttr(
+        "aria-pressed",
+        String(
+          decision === "edited"
+            ? candidate.decision === "edited" ||
+                this.knowledgeEditCandidateId === candidate.id
+            : candidate.decision === decision,
+        ),
+      );
+    }
+
+    const selectionLabel = item.createEl("label", {
+      cls: "c2v-knowledge-selection",
+    });
+    const selection = selectionLabel.createEl("input", { type: "checkbox" });
+    selection.checked = candidate.selected;
+    selection.disabled =
+      candidate.decision !== "accepted" && candidate.decision !== "edited";
+    selection.setAttr(
+      "aria-label",
+      `Select knowledge candidate ${candidate.title}`,
+    );
+    selection.addEventListener("change", () => {
+      controller.select(candidate.id, selection.checked);
+      this.knowledgeWriteResult = undefined;
+      this.draw(this.controller.snapshot);
+    });
+    selectionLabel.createEl("span", { text: "Select for dry-run" });
+
+    if (this.knowledgeEditCandidateId === candidate.id)
+      this.drawKnowledgeEditor(item, candidate, index);
+  }
+
+  private drawKnowledgeEditor(
+    parent: HTMLElement,
+    candidate: ReviewedKnowledgeCandidate,
+    index: number,
+  ): void {
+    const editor = parent.createEl("section", { cls: "c2v-knowledge-editor" });
+    editor.setAttr("aria-label", `Edit ${candidate.title}`);
+    const title = this.knowledgeEditField(
+      editor,
+      `c2v-knowledge-title-${String(index)}`,
+      "Knowledge title",
+      "input",
+      candidate.title,
+      M04_TITLE_MAX_UTF16,
+    ) as HTMLInputElement;
+    const summary = this.knowledgeEditField(
+      editor,
+      `c2v-knowledge-summary-${String(index)}`,
+      "Knowledge summary",
+      "textarea",
+      candidate.summary,
+      M04_SUMMARY_MAX_UTF16,
+    ) as HTMLTextAreaElement;
+    const body = this.knowledgeEditField(
+      editor,
+      `c2v-knowledge-body-${String(index)}`,
+      "Knowledge body",
+      "textarea",
+      candidate.body,
+      M04_BODY_MAX_UTF16,
+    ) as HTMLTextAreaElement;
+    const tags = this.knowledgeEditField(
+      editor,
+      `c2v-knowledge-tags-${String(index)}`,
+      "Knowledge tags, one per line",
+      "textarea",
+      candidate.tags.join("\n"),
+      M04_MAX_SUGGESTED_TAGS * (M04_SUGGESTION_MAX_UTF16 + 1),
+    ) as HTMLTextAreaElement;
+    const actions = editor.createDiv({
+      cls: "c2v-knowledge-candidate-actions",
+    });
+    this.button(actions, "Save edit", () => {
+      const result = this.knowledgeController?.edit(candidate.id, {
+        title: title.value,
+        summary: summary.value,
+        body: body.value,
+        tags: tags.value === "" ? [] : tags.value.split("\n"),
+      });
+      if (result?.ok === true) {
+        this.knowledgeEditCandidateId = undefined;
+        this.knowledgeEditDiagnostics = [];
+        this.knowledgeWriteResult = undefined;
+      } else if (result !== undefined) {
+        this.knowledgeEditDiagnostics = result.diagnostics;
+      }
+      this.draw(this.controller.snapshot);
+    });
+    this.button(actions, "Cancel edit", () => {
+      this.knowledgeEditCandidateId = undefined;
+      this.knowledgeEditDiagnostics = [];
+      this.draw(this.controller.snapshot);
+    });
+    this.drawKnowledgeDiagnostics(editor, this.knowledgeEditDiagnostics);
+  }
+
+  private knowledgeEditField(
+    parent: HTMLElement,
+    id: string,
+    labelText: string,
+    kind: "input" | "textarea",
+    value: string,
+    maxLength: number,
+  ): HTMLInputElement | HTMLTextAreaElement {
+    const label = parent.createEl("label", { text: labelText });
+    label.htmlFor = id;
+    const field = parent.createEl(kind);
+    field.id = id;
+    field.value = value;
+    field.maxLength = maxLength;
+    field.setAttr("aria-label", labelText);
+    return field;
+  }
+
+  private drawKnowledgeDiagnostics(
+    parent: HTMLElement,
+    diagnostics: readonly M06Diagnostic[],
+  ): void {
+    if (diagnostics.length === 0) return;
+    const list = parent.createEl("section", {
+      cls: "c2v-knowledge-diagnostics",
+    });
+    list.setAttr("aria-label", "Knowledge diagnostics");
+    for (const diagnostic of diagnostics)
+      list.createEl("p", {
+        cls: "c2v-error",
+        text: `${diagnostic.code}: ${diagnostic.message}`,
+      });
+  }
+
+  private drawKnowledgeLedger(
+    parent: HTMLElement,
+    result: KnowledgeWriteExecutionResult,
+  ): void {
+    const ledger = parent.createEl("section", {
+      cls: "c2v-knowledge-ledger",
+    });
+    ledger.setAttr("aria-label", "Knowledge write ledger");
+    ledger.createEl("h5", { text: "Write ledger" });
+    ledger.createEl("p", {
+      cls: "c2v-knowledge-status-label",
+      text: `Write status: ${result.status}`,
+    });
+    const entries = ledger.createEl("ul");
+    for (const entry of result.ledger)
+      entries.createEl("li", {
+        text: `${entry.targetPath} — ${entry.status}`,
+      });
+    this.drawKnowledgeDiagnostics(ledger, result.diagnostics);
+  }
+
+  private async previewKnowledge(): Promise<void> {
+    const controller = this.knowledgeController;
+    if (controller === undefined) return;
+    this.knowledgeWriteResult = undefined;
+    const pending = controller.preview();
+    this.draw(this.controller.snapshot);
+    await pending;
+    if (this.loaded) this.draw(this.controller.snapshot);
+  }
+
+  private async writeKnowledge(): Promise<void> {
+    const controller = this.knowledgeController;
+    if (controller === undefined) return;
+    const pending = Promise.resolve(controller.write());
+    this.draw(this.controller.snapshot);
+    const result = await pending;
+    if (!this.loaded) return;
+    this.knowledgeWriteResult = result;
+    this.draw(this.controller.snapshot);
   }
 
   private drawProvider(parent: HTMLElement): void {

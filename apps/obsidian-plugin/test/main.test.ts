@@ -707,6 +707,61 @@ describe("plugin command lifecycle", () => {
     expect(plugin.credentialState).toBe("unknown");
   });
 
+  it("invalidates every open knowledge owner for source settings, knowledge settings, and unload", async () => {
+    const manifest = {
+      id: "chat-to-vault",
+      name: "Chat2Vault",
+      version: "0.3.0",
+      minAppVersion: "1.7.4",
+      description: "test",
+      author: "test",
+      isDesktopOnly: true,
+    };
+    const plugin = new Chat2VaultPlugin({} as App, manifest);
+    (plugin as Chat2VaultPlugin & { manifest: typeof manifest }).manifest =
+      manifest;
+    plugin.app = {
+      vault: {
+        configDir: ".obsidian",
+        adapter: {
+          list: () => Promise.resolve({ files: [], folders: [] }),
+          stat: () => Promise.resolve(null),
+          readBinary: () => Promise.resolve(new ArrayBuffer(0)),
+        },
+      },
+    } as never;
+    plugin.loadData = () =>
+      Promise.resolve({
+        schemaVersion: 4,
+        installationId: "11111111-1111-4111-8111-111111111111",
+        previewMessagesPerPage: 25,
+        sourceRoot: "Sources",
+        knowledgeRoot: "Knowledge",
+        provider: {
+          endpoint: "",
+          model: "",
+          timeoutMs: 60_000,
+          maxOutputTokens: 4_096,
+          cloudDisclosureAccepted: false,
+        },
+      });
+    await plugin.onload();
+    const reasons: string[] = [];
+    const integration = plugin as unknown as {
+      knowledgeInvalidators: Set<(reason: "settings" | "unload") => void>;
+    };
+    integration.knowledgeInvalidators.add((reason) => reasons.push(reason));
+
+    await expect(plugin.saveSourceRoot("Other sources")).resolves.toEqual({
+      status: "saved",
+    });
+    await expect(plugin.saveKnowledgeRoot("Other knowledge")).resolves.toEqual({
+      status: "saved",
+    });
+    plugin.onunload();
+    expect(reasons).toEqual(["settings", "settings", "unload"]);
+  });
+
   it("registers without auto-opening, reuses one leaf, and validates only after reveal", async () => {
     const manifest = {
       id: "chat-to-vault",
@@ -759,7 +814,19 @@ describe("plugin command lifecycle", () => {
         }
       },
     };
-    plugin.app = { workspace } as never;
+    plugin.app = {
+      workspace,
+      vault: {
+        configDir: ".obsidian",
+        adapter: {
+          list: () => Promise.resolve({ files: [], folders: [] }),
+          stat: () => Promise.resolve(null),
+          readBinary: () => Promise.resolve(new ArrayBuffer(0)),
+        },
+        createFolder: () => Promise.resolve(),
+        create: () => Promise.resolve(),
+      },
+    } as never;
     await plugin.onload();
     expect(getLeafCalls).toBe(0);
     expect(harness.commands).toHaveLength(1);
@@ -769,11 +836,12 @@ describe("plugin command lifecycle", () => {
     });
     await plugin.savePreviewMessagesPerPage(50);
     await plugin.saveSourceRoot("Sources");
+    await plugin.saveKnowledgeRoot("Knowledge");
     expect(harness.savedData).toMatchObject({
       schemaVersion: 4,
       previewMessagesPerPage: 50,
       sourceRoot: "Sources",
-      knowledgeRoot: "",
+      knowledgeRoot: "Knowledge",
       provider: {
         endpoint: "",
         model: "",
@@ -796,6 +864,19 @@ describe("plugin command lifecycle", () => {
     expect(revealCalls).toBe(1);
     expect(leaves[0]?.view).toBeInstanceOf(Chat2VaultView);
     expect(document.activeElement?.classList.contains("c2v-choose")).toBe(true);
+    const wiredView = leaves[0]?.realView as unknown as {
+      knowledgeController?: unknown;
+      providerServices?: object;
+    };
+    expect(wiredView.knowledgeController).toBeDefined();
+    expect(Object.keys(wiredView.providerServices ?? {})).toEqual([
+      "current",
+      "readCredential",
+      "transport",
+      "observeCredentialOnViewOpen",
+      "registerInvalidator",
+      "registerStateObserver",
+    ]);
     harness.commands[0]?.callback();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(getLeafCalls).toBe(1);
