@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { URL } from "node:url";
 import ts from "typescript";
@@ -765,8 +765,14 @@ function scanWriterAuthorityTypes(records) {
   const sourceAdapterPath = resolve(
     join(pluginSourceRoot, "source-vault-adapter.ts"),
   );
+  const typescriptDefaultLibDirectory = dirname(
+    resolve(ts.getDefaultLibFilePath(parsed.options)),
+  );
   const authorityCache = new Map();
-  const authorityVisiting = new Set();
+  const authorityVisitingTypes = new Set();
+  const authorityTraversalBudget = 100_000;
+  let authorityTraversalCount = 0;
+  let authorityTraversalExhausted = false;
 
   const directTypeNames = (type) =>
     new Set(
@@ -814,26 +820,26 @@ function scanWriterAuthorityTypes(records) {
     }
     return undefined;
   };
+  const isTypeScriptDefaultLibDeclaration = (declaration) => {
+    const file = resolve(declaration.getSourceFile().fileName);
+    return (
+      dirname(file) === typescriptDefaultLibDirectory &&
+      /^lib(?:\..+)?\.d\.ts$/u.test(basename(file))
+    );
+  };
   const inspectableDeclaration = (declaration) => {
     const source = declaration.getSourceFile();
-    if (program.isSourceFileDefaultLibrary(source)) return false;
+    if (
+      program.isSourceFileDefaultLibrary(source) ||
+      isTypeScriptDefaultLibDeclaration(declaration)
+    )
+      return false;
     const file = resolve(source.fileName);
     return (
       !file.includes(`${join("node_modules")}/`) ||
       file.includes(`${join("node_modules", "obsidian")}/`)
     );
   };
-  const builtInContainerNames = new Set([
-    "Array",
-    "Map",
-    "Object",
-    "Promise",
-    "ReadonlyArray",
-    "Set",
-    "String",
-    "WeakMap",
-    "WeakSet",
-  ]);
   const twoArgumentMutationMethods = new Set([
     "append",
     "appendBinary",
@@ -845,11 +851,13 @@ function scanWriterAuthorityTypes(records) {
     "modifyBinary",
     "process",
     "rename",
+    "rmdir",
+    "trash",
     "write",
     "writeBinary",
     "writeFile",
   ]);
-  const minimumMutationArguments = new Map(
+  const canonicalMutationArgumentCounts = new Map(
     [...forbiddenVaultMutations].map((method) => [
       method,
       twoArgumentMutationMethods.has(method) ? 2 : 1,
@@ -861,8 +869,75 @@ function scanWriterAuthorityTypes(records) {
       ts.isClassDeclaration(owner) ||
       ts.isTypeAliasDeclaration(owner)) &&
       owner.name !== undefined
-      ? owner.name.text
+      ? owner
       : undefined;
+  };
+  const defaultLibMutationOwner = (declaration) => {
+    const owner = mutationDeclarationOwner(declaration);
+    if (owner === undefined) return false;
+    const symbol = checker.getSymbolAtLocation(owner.name);
+    return (
+      symbol?.declarations?.some(isTypeScriptDefaultLibDeclaration) === true
+    );
+  };
+  const tupleBounds = (node) => {
+    if (ts.isParenthesizedTypeNode(node)) return tupleBounds(node.type);
+    if (
+      ts.isArrayTypeNode(node) ||
+      (ts.isTypeReferenceNode(node) &&
+        ts.isIdentifier(node.typeName) &&
+        ["Array", "ReadonlyArray"].includes(node.typeName.text))
+    )
+      return { minimum: 0, maximum: Number.POSITIVE_INFINITY };
+    if (!ts.isTupleTypeNode(node)) return undefined;
+    let minimum = 0;
+    let maximum = 0;
+    for (const element of node.elements) {
+      if (ts.isNamedTupleMember(element)) {
+        if (element.dotDotDotToken !== undefined) {
+          const nested = tupleBounds(element.type);
+          if (nested === undefined) return undefined;
+          minimum += nested.minimum;
+          maximum += nested.maximum;
+        } else {
+          maximum += 1;
+          if (element.questionToken === undefined) minimum += 1;
+        }
+      } else if (ts.isOptionalTypeNode(element)) maximum += 1;
+      else if (ts.isRestTypeNode(element)) {
+        const nested = tupleBounds(element.type);
+        if (nested === undefined) return undefined;
+        minimum += nested.minimum;
+        maximum += nested.maximum;
+      } else {
+        minimum += 1;
+        maximum += 1;
+      }
+    }
+    return { minimum, maximum };
+  };
+  const signatureAcceptsArgumentCount = (signature, count) => {
+    const declaration = signature.getDeclaration();
+    if (declaration === undefined) return undefined;
+    let minimum = 0;
+    let maximum = 0;
+    for (const parameter of declaration.parameters) {
+      if (parameter.dotDotDotToken !== undefined) {
+        if (parameter.type === undefined) return undefined;
+        const bounds = tupleBounds(parameter.type);
+        if (bounds === undefined) return undefined;
+        minimum += bounds.minimum;
+        maximum += bounds.maximum;
+      } else {
+        maximum += 1;
+        if (
+          parameter.questionToken === undefined &&
+          parameter.initializer === undefined
+        )
+          minimum += 1;
+      }
+    }
+    return count >= minimum && count <= maximum;
   };
   const callableMutationMember = (type) =>
     [...forbiddenVaultMutations].some((method) => {
@@ -872,52 +947,59 @@ function scanWriterAuthorityTypes(records) {
         !member.declarations?.some(
           (declaration) =>
             inspectableDeclaration(declaration) &&
-            !builtInContainerNames.has(
-              mutationDeclarationOwner(declaration) ?? "",
-            ),
+            !defaultLibMutationOwner(declaration),
         )
       )
         return false;
       return member.declarations.some((declaration) => {
         if (
           !inspectableDeclaration(declaration) ||
-          builtInContainerNames.has(mutationDeclarationOwner(declaration) ?? "")
+          defaultLibMutationOwner(declaration)
         )
           return false;
         const memberType = checker.getTypeOfSymbolAtLocation(
           member,
           declaration,
         );
-        return memberType.getCallSignatures().some((signature) => {
-          const signatureDeclaration = signature.getDeclaration();
+        if (
+          (memberType.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !==
+          0
+        )
+          return true;
+        const signatures = memberType.getCallSignatures();
+        if (signatures.length === 0)
           return (
-            signatureDeclaration !== undefined &&
-            signatureDeclaration.parameters.filter(
-              (parameter) =>
-                parameter.questionToken === undefined &&
-                parameter.initializer === undefined &&
-                parameter.dotDotDotToken === undefined,
-            ).length >= (minimumMutationArguments.get(method) ?? 1)
+            ts.isMethodDeclaration(declaration) ||
+            ts.isMethodSignature(declaration)
           );
-        });
+        const count = canonicalMutationArgumentCounts.get(method) ?? 1;
+        return signatures.some(
+          (signature) =>
+            signatureAcceptsArgumentCount(signature, count) !== false,
+        );
       });
     });
-  const typeHasAuthority = (type, depth = 0) => {
+  const typeHasAuthority = (type) => {
     const cached = authorityCache.get(type);
     if (cached !== undefined) return cached;
-    if (authorityVisiting.has(type) || depth > 12) return false;
-    authorityVisiting.add(type);
-    // Seed the cache before asking the checker for instantiated members. This
-    // is deliberately conservative for our local types while preventing
-    // recursive standard-library and Obsidian declarations from exploding.
+    if (authorityVisitingTypes.has(type)) return false;
+    authorityTraversalCount += 1;
+    if (authorityTraversalCount > authorityTraversalBudget) {
+      authorityTraversalExhausted = true;
+      authorityCache.set(type, true);
+      return true;
+    }
+    authorityVisitingTypes.add(type);
+    // Seed the cache before asking the checker for instantiated members. Type
+    // identity in authorityVisitingTypes terminates recursive declarations;
+    // exhaustion is reported and treated as authority rather than safe.
     authorityCache.set(type, false);
     let result = callableMutationMember(type);
     if (!result && type.isUnionOrIntersection())
-      result = type.types.some((part) => typeHasAuthority(part, depth + 1));
+      result = type.types.some((part) => typeHasAuthority(part));
     if (!result && (type.flags & ts.TypeFlags.TypeParameter) !== 0) {
       const constraint = checker.getBaseConstraintOfType(type);
-      result =
-        constraint !== undefined && typeHasAuthority(constraint, depth + 1);
+      result = constraint !== undefined && typeHasAuthority(constraint);
     }
     const symbol = type.aliasSymbol ?? type.getSymbol();
     const resolvedDeclaration = symbol?.declarations?.some(
@@ -948,7 +1030,7 @@ function scanWriterAuthorityTypes(records) {
       if ((type.objectFlags & ts.ObjectFlags.Reference) !== 0)
         result = checker
           .getTypeArguments(type)
-          .some((argument) => typeHasAuthority(argument, depth + 1));
+          .some((argument) => typeHasAuthority(argument));
       if (!result)
         result = checker.getPropertiesOfType(type).some((property) => {
           const declaration =
@@ -958,7 +1040,6 @@ function scanWriterAuthorityTypes(records) {
             property.declarations?.some(inspectableDeclaration) === true &&
             typeHasAuthority(
               checker.getTypeOfSymbolAtLocation(property, declaration),
-              depth + 1,
             )
           );
         });
@@ -973,7 +1054,7 @@ function scanWriterAuthorityTypes(records) {
             !inspectableDeclaration(signatureDeclaration)
           )
             continue;
-          if (typeHasAuthority(signature.getReturnType(), depth + 1)) {
+          if (typeHasAuthority(signature.getReturnType())) {
             result = true;
             break;
           }
@@ -985,7 +1066,6 @@ function scanWriterAuthorityTypes(records) {
                 declaration !== undefined &&
                 typeHasAuthority(
                   checker.getTypeOfSymbolAtLocation(parameter, declaration),
-                  depth + 1,
                 )
               );
             })
@@ -995,7 +1075,7 @@ function scanWriterAuthorityTypes(records) {
           }
         }
     }
-    authorityVisiting.delete(type);
+    authorityVisitingTypes.delete(type);
     authorityCache.set(type, result);
     return result;
   };
@@ -1288,6 +1368,10 @@ function scanWriterAuthorityTypes(records) {
     };
     visit(source);
   }
+  if (authorityTraversalExhausted)
+    failures.push(
+      `M06 writer authority analysis exhausted its ${String(authorityTraversalBudget)}-type traversal budget and failed closed`,
+    );
 }
 
 for (const record of [...knowledgePluginRecords, ...knowledgeCoreRecords]) {

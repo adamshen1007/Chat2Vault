@@ -51,6 +51,21 @@ const completeMutationMethods = [
   "writeFile",
 ] as const;
 
+async function runAdversarialBoundary(source: string): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "c2v-m06-classifier-"));
+  const fixture = join(directory, "knowledge-classifier-adversary.ts");
+  await writeFile(fixture, source, "utf8");
+  try {
+    execFileSync(process.execPath, [checker, "--adversarial-file", fixture], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 function candidate(id = candidateId): PreviewCandidate {
   return {
     id,
@@ -549,6 +564,186 @@ export function adversary(writer: Writer, sink: (value: unknown) => unknown) {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it.each(["Array", "Map", "Object", "Promise"])(
+    "does not exempt a repository-local %s shadow from structural authority",
+    async (shadowName) => {
+      await expect(
+        runAdversarialBoundary(
+          `export interface ${shadowName} { write(path: string, bytes: Uint8Array): unknown }
+export function adversary(writer: ${shadowName}, path: string, bytes: Uint8Array, sink: (value: unknown) => unknown) {
+  writer["write"](path, bytes);
+  sink(writer);
+}`,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
+  it("keeps actual standard-library read-only containers non-authority", async () => {
+    await expect(
+      runAdversarialBoundary(
+        `export function inspect(map: Map<string, string>, set: Set<string>, values: readonly string[], pending: Promise<string>, sink: (value: unknown) => unknown) {
+  void map.get("key");
+  void set.has("value");
+  void values.slice();
+  void pending.then((value) => value);
+  sink({ map, set, values, pending });
+}`,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    [
+      "optional parameters",
+      "write(path?: string, bytes?: Uint8Array): unknown",
+    ],
+    [
+      "tuple rest parameters",
+      "write(...args: [path: string, bytes: Uint8Array]): unknown",
+    ],
+    ["general rest parameters", "write(...args: unknown[]): unknown"],
+  ])(
+    "rejects structural writer authority with %s",
+    async (_name, signature) => {
+      await expect(
+        runAdversarialBoundary(
+          `interface Writer { ${signature} }
+export function adversary(writer: Writer, path: string, bytes: Uint8Array, sink: (value: unknown) => unknown) {
+  writer["write"](path, bytes);
+  sink(writer);
+}`,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
+  it("fails closed for an indeterminate callable mutation member", async () => {
+    await expect(
+      runAdversarialBoundary(
+        `interface IndeterminateWriter { write: any }
+export function adversary(writer: IndeterminateWriter, sink: (value: unknown) => unknown) {
+  sink(writer);
+}`,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it.each([
+    ["rmdir", "path: string, recursive: boolean"],
+    ["trash", "file: unknown, system: boolean"],
+  ])(
+    "uses the two-argument canonical count for %s",
+    async (method, parameters) => {
+      await expect(
+        runAdversarialBoundary(
+          `interface Writer { ${method}(${parameters}): unknown }
+export function adversary(writer: Writer, sink: (value: unknown) => unknown) {
+  sink(writer);
+}`,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
+  it.each([
+    ["zero-argument method", "write(): unknown"],
+    ["one-argument method", "write(path: string): unknown"],
+    [
+      "three-required-argument method",
+      "write(path: string, bytes: Uint8Array, mode: string): unknown",
+    ],
+    [
+      "one-position tuple-rest method",
+      "write(...args: [path: string]): unknown",
+    ],
+    ["one-argument rmdir method", "rmdir(path: string): unknown"],
+    ["one-argument trash method", "trash(file: unknown): unknown"],
+    ["non-callable property", "write: string"],
+  ])("keeps incompatible %s non-authority", async (_name, member) => {
+    await expect(
+      runAdversarialBoundary(
+        `interface ReadOnlyShape { ${member} }
+export function inspect(value: ReadOnlyShape, sink: (value: unknown) => unknown) {
+  sink(value);
+}`,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects writer authority beyond fourteen imported envelope layers", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "c2v-m06-deep-envelope-"));
+    const authority = join(directory, "authority.ts");
+    const consumer = join(directory, "knowledge-consumer.ts");
+    const layers = Array.from(
+      { length: 18 },
+      (_, index) =>
+        `export interface Layer${String(index + 1)} { nested: Layer${String(index)} }`,
+    ).join("\n");
+    await writeFile(
+      authority,
+      `export interface Writer { write(path: string, bytes: Uint8Array): unknown }
+export interface Layer0 { writer: Writer }
+${layers}
+export declare const envelope: Layer18;`,
+      "utf8",
+    );
+    await writeFile(
+      consumer,
+      `import { envelope } from "./authority.js";
+export const escaped = envelope;`,
+      "utf8",
+    );
+    try {
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [checker, "--adversarial-file", consumer],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("terminates a recursive read-only cycle without inventing authority", async () => {
+    await expect(
+      runAdversarialBoundary(
+        `interface Left { right?: Right; value: string }
+interface Right { left?: Left; count: number }
+export function inspect(value: Left, sink: (value: unknown) => unknown) {
+  sink(value);
+}`,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects writer authority reachable through a recursive cycle", async () => {
+    await expect(
+      runAdversarialBoundary(
+        `interface Writer { write(path: string, bytes: Uint8Array): unknown }
+interface Left { right?: Right }
+interface Right { left?: Left; writer?: Writer }
+export function adversary(value: Left, sink: (value: unknown) => unknown) {
+  sink(value);
+}`,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("locks fail-closed traversal exhaustion and removes depth shortcuts", () => {
+    const boundary = readFileSync(checker, "utf8");
+    expect(boundary).not.toContain("depth >");
+    expect(boundary).toContain("authorityTraversalExhausted = true");
+    expect(boundary).toContain("authorityCache.set(type, true)");
+    expect(boundary).toContain("traversal budget and failed closed");
   });
 
   it("uses the SHA inventory and provider contribution comparator for M06", () => {
