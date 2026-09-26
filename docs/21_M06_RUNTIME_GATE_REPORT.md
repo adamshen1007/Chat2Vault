@@ -1,14 +1,14 @@
 # Milestone 06 Runtime Gate Report
 
-Version: 0.9-indexed-authority-remediation-candidate
+Version: 1.0 exact-candidate final gate
 
 Date: 2026-09-26
 
-Decision: **PASS — Task 7 remediation is ready for a fresh independent R2 review; whole-M06 acceptance remains pending**
+Decision: **CONDITIONAL GO — the complete Task 8 candidate passed the full gate; the authorized local documentation commit and fresh independent R2 exact-candidate review remain**
 
 ## Qualified candidate
 
-This report records the remediated M06 capability boundary and two-row macOS x86_64 runtime qualification. It does not authorize publication, merge, deployment, release, Community Plugin submission, or M07 work.
+This report records the remediated M06 capability boundary, two-row macOS x86_64 runtime qualification, and final Task 8 full-candidate verification. It authorizes only the separately approved local Task 8 documentation commit. It does not authorize push, pull request, merge, deployment, release, Community Plugin submission, provider spend, or M07 work.
 
 - Repository: `Chat2Vault`
 - Branch: `codex/milestone-06-design`
@@ -22,6 +22,8 @@ This report records the remediated M06 capability boundary and two-row macOS x86
 - Fail-closed authority remediation commit/tree: `633bbaceeed6fd999a59c7fb9b07572cbea7f663` / `8402ae974ca992b2c4eeac8945c75a0d4b51e507`
 - Structural-traversal remediation commit/tree: `841c47e224ca97e8de1f2d6cd4aebf4f4d7ed465` / `6c137055dacf86d6cc67a2672b9e58c0bad8a23f`
 - Final indexed-authority remediation commit/tree: recorded in the ignored Task 7 execution report after commit; a tracked file cannot embed its own commit hash
+- Task 8 input commit/tree: `a4c6698fdea185177d736836c8686e0c2060cbb1` / `87ce841bc509fc75d0afd825dd6fe62e1a3b30e9`
+- Final Task 8 commit/tree: recorded in the ignored Task 8 execution report after commit; a tracked file cannot embed its own commit hash
 - Upstream: none configured
 - Host: macOS 15.7.9 (build 24G830), x86_64
 - Development runtime: Node.js 24.16.0; pnpm 11.7.0
@@ -129,28 +131,35 @@ The retained knowledge evidence is identical in both rows:
 
 ## Verification ledger
 
-| Command                                                                                                                        | Result                                                                      |
-| ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| Focused third-remediation RED run                                                                                              | RED: 15 failed and 37 passed tests, reproducing both findings               |
-| `pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m06-boundaries.test.ts test/m06-runtime-acceptance.test.ts`    | PASS: 2 files, 52 tests                                                     |
-| Structural-authority RED run                                                                                                   | RED: four authority escapes plus the aggregate computed-member regression   |
-| Structural-authority focused GREEN run                                                                                         | PASS: six focused boundary/aggregate tests                                  |
-| Fail-closed classifier RED run                                                                                                 | RED: eight intended failures; six read-only/cycle controls passed           |
-| Fail-closed classifier focused GREEN run                                                                                       | PASS: local shadows, signature bounds, deep wrappers, and recursive cycles  |
-| Structural-traversal follow-up RED run                                                                                         | RED: nine authority escapes plus the missing timeout guard                  |
-| Structural-traversal focused GREEN run                                                                                         | PASS: eleven focused negative/control/timeout tests                         |
-| Indexed-authority RED run                                                                                                      | RED: five whole-transfer escapes; computed/read-only controls stayed green  |
-| Indexed-authority and child-termination focused GREEN run                                                                      | PASS: twelve focused negative/control/termination tests                     |
-| `pnpm check:m06` (first consecutive run)                                                                                       | PASS: AST boundary plus 95 M06 tests                                        |
-| `pnpm check:m06` (second consecutive run)                                                                                      | PASS: AST boundary plus 95 M06 tests                                        |
-| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row minimum --evidence-file docs/evidence/m06-runtime-minimum.json` | PASS: official Obsidian 1.7.4, 9/9                                          |
-| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row stable --evidence-file docs/evidence/m06-runtime-stable.json`   | PASS: official current stable 1.13.7, 9/9                                   |
-| `pnpm typecheck`                                                                                                               | PASS: core and plugin                                                       |
-| `pnpm lint`                                                                                                                    | PASS: full repository                                                       |
-| `pnpm test`                                                                                                                    | PASS: core 304 tests and plugin 743 tests                                   |
-| `pnpm build`                                                                                                                   | PASS: core and plugin; existing Security-framework deprecation warning only |
-| `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000 pnpm check:plugin`                                                                         | PASS: full general/M03/M04/two-row M05/M06 clean-state chain                |
-| `shasum -a 256 docs/evidence/m06-runtime-{minimum,stable}.json`                                                                | PASS: exact packet hashes reproduced                                        |
+| Command                                                                                                                        | Result                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| Focused third-remediation RED run                                                                                              | RED: 15 failed and 37 passed tests, reproducing both findings                                       |
+| `pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m06-boundaries.test.ts test/m06-runtime-acceptance.test.ts`    | PASS: 2 files, 52 tests                                                                             |
+| Structural-authority RED run                                                                                                   | RED: four authority escapes plus the aggregate computed-member regression                           |
+| Structural-authority focused GREEN run                                                                                         | PASS: six focused boundary/aggregate tests                                                          |
+| Fail-closed classifier RED run                                                                                                 | RED: eight intended failures; six read-only/cycle controls passed                                   |
+| Fail-closed classifier focused GREEN run                                                                                       | PASS: local shadows, signature bounds, deep wrappers, and recursive cycles                          |
+| Structural-traversal follow-up RED run                                                                                         | RED: nine authority escapes plus the missing timeout guard                                          |
+| Structural-traversal focused GREEN run                                                                                         | PASS: eleven focused negative/control/timeout tests                                                 |
+| Indexed-authority RED run                                                                                                      | RED: five whole-transfer escapes; computed/read-only controls stayed green                          |
+| Indexed-authority and child-termination focused GREEN run                                                                      | PASS: twelve focused negative/control/termination tests                                             |
+| `pnpm check:m06` (first consecutive run)                                                                                       | PASS: AST boundary plus 95 M06 tests                                                                |
+| `pnpm check:m06` (second consecutive run)                                                                                      | PASS: AST boundary plus 95 M06 tests                                                                |
+| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row minimum --evidence-file docs/evidence/m06-runtime-minimum.json` | PASS: official Obsidian 1.7.4, 9/9                                                                  |
+| `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row stable --evidence-file docs/evidence/m06-runtime-stable.json`   | PASS: official current stable 1.13.7, 9/9                                                           |
+| `pnpm typecheck`                                                                                                               | PASS: core and plugin                                                                               |
+| `pnpm lint`                                                                                                                    | PASS: full repository                                                                               |
+| `pnpm test`                                                                                                                    | PASS: core 304 tests and plugin 743 tests                                                           |
+| `pnpm build`                                                                                                                   | PASS: core and plugin; existing Security-framework deprecation warning only                         |
+| `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000 pnpm check:plugin`                                                                         | PASS: full general/M03/M04/two-row M05/M06 clean-state chain                                        |
+| `shasum -a 256 docs/evidence/m06-runtime-{minimum,stable}.json`                                                                | PASS: exact packet hashes reproduced                                                                |
+| `node --version`                                                                                                               | PASS: `v24.16.0`                                                                                    |
+| `pnpm --version`                                                                                                               | PASS: `11.7.0`                                                                                      |
+| Task 8 targeted core suite                                                                                                     | PASS: 3 files, 42 tests                                                                             |
+| Task 8 targeted plugin suite                                                                                                   | PASS: 4 files, 170 tests, including M06 boundary 95/95                                              |
+| `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000 pnpm verify`                                                                               | PASS: format, lint, strict typecheck, core 304/304, plugin 743/743, build, and complete plugin gate |
+
+The final full gate rebuilt the exact qualified production artifacts and re-executed both official hosts. Minimum Obsidian 1.7.4 and current stable Obsidian 1.13.7 each reached `complete`; their exact `BrowserWindow` and `webContents` focus assertions passed before the UI checks advanced. The aggregate then passed the M06 boundary gate and runtime-artifact identity gate with production `main.js` SHA-256 `ab9d32ef8367094ca71182eb5c76dc6667253811b7c53d8f0fa20d4034599e02` and runtime-only bundle SHA-256 `f4d8fac3149b5cfc5398430b16d80c4911e4b524017b0aa7d320afc0b9afda3b`.
 
 ## Failure and remediation ledger
 
@@ -174,6 +183,7 @@ The retained knowledge evidence is identical in both rows:
 18. The R2 re-review found three classifier fail-open edges: built-in exemptions used owner spelling, callable arity ignored optional/rest acceptance, and recursion returned safe after a fixed depth. Eight RED results reproduced four local built-in-name shadows, three optional/rest writers, and an imported 18-layer envelope. Default-library symbol resolution, exact signature bounds with indeterminate fail-closed handling, type-identity cycle detection, and explicit fail-closed resource exhaustion close the findings; read-only standard containers, incompatible mutation shapes, and recursive read-only graphs remain non-authority.
 19. The next R2 re-review found four remaining edges: generic arguments were skipped for default-library containers, merged symbols exempted local global mutation augmentations, explicit `this` inflated runtime arity, and subprocess-heavy probes retained Vitest's unreliable five-second default. Nine RED authority cases plus the timeout guard reproduced the findings. Reference arguments now traverse before container eligibility, exemption is based on each mutation declaration's own source with one exact Obsidian augmentation, explicit `this` is excluded, and the file uses a bounded 15-second timeout. Both final unmodified `pnpm check:m06` runs passed 84/84.
 20. The latest R2 re-review found that whole indexed containers could hide writer authority and that Vitest's timeout could not terminate a synchronous child. Five RED whole-transfer probes reproduced `Record`, string, number, symbol, and nested indexed escapes while computed extraction and read-only indexed controls stayed green. Every index-info value now traverses under existing cycle/budget controls, and every boundary child uses the centralized real 15-second subprocess timeout with `SIGKILL`; an actual non-terminating-child regression proves termination. Both exact unmodified `pnpm check:m06` runs passed 95/95.
+21. Three earlier Task 8 full-gate attempts reached the minimum `ui-main-focus` stage but failed closed because the macOS foreground click was not delivered during the bounded operator-assist window. They were operator-timing failures, not product failures. The final Task 8 run delivered the cues at the emitted minimum and stable focus stages; both exact `BrowserWindow` and `webContents` assertions passed, both rows completed, and `pnpm verify` exited 0.
 
 No macOS TCC prompt remained. A visible operator click was required only to satisfy the strict focus assertion during the bounded qualification window.
 
@@ -194,4 +204,4 @@ The remediation changed only authorized Task 7 files plus the narrowly permitted
 
 Narrow existing pre-M06 surfaces modified to preserve prior guarantees are `check-plugin.mjs`, `check-m04-boundaries.mjs`, `check-m05-runtime.mjs`, and `compare-m05-runtime-artifact.mjs`. The final qualified generated `main.js` and `worker.js` are intentionally included. Provider, core, knowledge production behavior, native source, dependencies, lockfile, README/index/Task 8 documents, and M07 remain unchanged.
 
-The Task 7 remediation candidate is **GO for its authorized local commit and fresh independent R2 review**. Whole-M06 acceptance, publication, and M07 remain **NO-GO** until separate authorization.
+The complete Task 8 candidate is **GO for the separately authorized local documentation commit and fresh independent R2 exact-candidate review**. Whole-M06 acceptance remains conditional on that review. Push, pull request, merge, tag, deployment, release, Community Plugin submission, provider spend, and M07 remain **NO-GO** until separately authorized.

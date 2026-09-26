@@ -1,7 +1,7 @@
 # Chat2Vault Document Index
 
-Version: 0.21
-Status: M03-M05 complete and merged; M06 knowledge review/writer design approved
+Version: 0.22
+Status: M03-M05 complete and merged; local M06 knowledge review/writer candidate qualified for final independent review
 Working name: Chat2Vault
 
 | Document                                                             | Purpose                                                                                        |
@@ -32,6 +32,8 @@ Working name: Chat2Vault
 | `M05_FILE_KEYCHAIN_AMENDMENT.md`                                     | Approved file-Keychain selection amendment for the M05 native credential boundary              |
 | `18_M05_IMPLEMENTATION_NOTES.md`                                     | M05 implementation architecture, inventory, acceptance mapping, evidence, and readiness state  |
 | `19_M05_RUNTIME_GATE_REPORT.md`                                      | Exact Obsidian 1.7.4/current-stable two-row M05 macOS runtime qualification                    |
+| `20_M06_IMPLEMENTATION_NOTES.md`                                     | M06 architecture, user workflow, inventory, verification, limitations, and readiness state     |
+| `21_M06_RUNTIME_GATE_REPORT.md`                                      | Exact Obsidian 1.7.4/current-stable two-row M06 macOS runtime qualification                    |
 | `superpowers/specs/2026-09-15-m06-knowledge-review-writer-design.md` | Product Owner-approved M06 architecture, UX, write-safety, and verification design             |
 | `superpowers/plans/2026-09-15-m06-knowledge-review-writer.md`        | Test-first task plan for implementing and qualifying the approved M06 design                   |
 | `../prompts/CODEX_M01_EXECUTION_PROMPT.md`                           | Consolidated Codex implementation prompt for Milestone 01                                      |
@@ -104,4 +106,4 @@ For Milestone 06 design, the authority order is:
 7. `docs/05_ROADMAP.md`
 8. `docs/06_OPEN_SOURCE_RELEASE_STRATEGY.md`
 
-The approved design is the complete M06 implementation authority. Its approval authorizes implementation planning, not application-code changes; explicit Product Owner selection of an implementation execution path remains required before those changes begin.
+The approved design is the complete M06 implementation authority. Its approval authorized implementation planning; the Product Owner then separately selected and executed the committed implementation plan. The milestone authority baseline remains the M05 merge `be0f5803ac39120e00e9994a936a8858a1cf3187`; approved design commit `81964c7ed7367e59cefe1c946d74c4424dfb144d` and plan commit `f05b0016cde3ca984f024a1ccf1edd93e56d0323` are later committed M06 documentation baselines, not replacements for the M05 product baseline. The local implementation and two-row runtime gate do not authorize push, pull request, merge, tag, deployment, release, Community Plugin submission, provider spend, or M07 work. Final milestone acceptance still requires a fresh independent R2 review of the exact committed candidate.
