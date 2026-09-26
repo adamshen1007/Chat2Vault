@@ -66,6 +66,26 @@ async function runAdversarialBoundary(source: string): Promise<void> {
   }
 }
 
+async function runImportedAdversarialBoundary(
+  authoritySource: string,
+  consumerSource: string,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "c2v-m06-imported-type-"));
+  const authority = join(directory, "authority.ts");
+  const consumer = join(directory, "knowledge-consumer.ts");
+  await writeFile(authority, authoritySource, "utf8");
+  await writeFile(consumer, consumerSource, "utf8");
+  try {
+    execFileSync(process.execPath, [checker, "--adversarial-file", consumer], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 function candidate(id = candidateId): PreviewCandidate {
   return {
     id,
@@ -193,6 +213,8 @@ function interfaceKeys(file: string, interfaceName: string): string[] {
     .map((name) => name.getText(sourceFile).replaceAll(/["']/gu, ""))
     .sort();
 }
+
+vi.setConfig({ testTimeout: 15_000 });
 
 describe("M06 capability and privacy boundary", () => {
   it("passes the syntax-aware M06 static boundary checker", () => {
@@ -744,6 +766,82 @@ export function adversary(value: Left, sink: (value: unknown) => unknown) {
     expect(boundary).toContain("authorityTraversalExhausted = true");
     expect(boundary).toContain("authorityCache.set(type, true)");
     expect(boundary).toContain("traversal budget and failed closed");
+  });
+
+  it.each([
+    ["ReadonlyArray", "ReadonlyArray<Writer>"],
+    ["Promise", "Promise<Writer>"],
+    ["Map", "Map<string, Writer>"],
+    ["Set", "Set<Writer>"],
+  ])(
+    "rejects writer authority in imported default-lib %s type arguments",
+    async (_name, containerType) => {
+      await expect(
+        runImportedAdversarialBoundary(
+          `export interface Writer { write(path: string, bytes: Uint8Array): unknown }
+export declare const wrapped: ${containerType};`,
+          `import { wrapped } from "./authority.js";
+export const escaped = wrapped;`,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
+  it("keeps imported default-lib string containers non-authority", async () => {
+    await expect(
+      runImportedAdversarialBoundary(
+        `export declare const readonlyValues: ReadonlyArray<string>;
+export declare const pending: Promise<string>;
+export declare const index: Map<string, string>;
+export declare const unique: Set<string>;`,
+        `import { index, pending, readonlyValues, unique } from "./authority.js";
+export const inspected = { index, pending, readonlyValues, unique };`,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["Array", "interface Array<T>", "Array<string>"],
+    ["Map", "interface Map<K, V>", "Map<string, string>"],
+    ["Object", "interface Object", "Object"],
+    ["Promise", "interface Promise<T>", "Promise<string>"],
+  ])(
+    "does not exempt a local global %s augmentation",
+    async (_name, declaration, valueType) => {
+      await expect(
+        runAdversarialBoundary(
+          `export {};
+declare global { ${declaration} { write(path: string, bytes: Uint8Array): unknown } }
+export function adversary(value: ${valueType}, path: string, bytes: Uint8Array, sink: (value: unknown) => unknown) {
+  value["write"](path, bytes);
+  sink(value);
+}`,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
+  it("excludes an explicit TypeScript this parameter from mutation arity", async () => {
+    await expect(
+      runAdversarialBoundary(
+        `interface Writer { write(this: Writer, path: string, bytes: Uint8Array): unknown }
+export function adversary(writer: Writer, path: string, bytes: Uint8Array, sink: (value: unknown) => unknown) {
+  writer["write"](path, bytes);
+  sink(writer);
+}`,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("uses a bounded timeout for subprocess-heavy adversarial probes", () => {
+    const boundaryTests = readFileSync(
+      join(pluginRoot, "test/m06-boundaries.test.ts"),
+      "utf8",
+    );
+    const configurationCall = ["vi", "setConfig({ testTimeout: 15_000 })"].join(
+      ".",
+    );
+    expect(boundaryTests.split(configurationCall)).toHaveLength(2);
   });
 
   it("uses the SHA inventory and provider contribution comparator for M06", () => {

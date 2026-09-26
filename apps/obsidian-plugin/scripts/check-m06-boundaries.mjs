@@ -880,6 +880,23 @@ function scanWriterAuthorityTypes(records) {
       symbol?.declarations?.some(isTypeScriptDefaultLibDeclaration) === true
     );
   };
+  const exactObsidianArrayRemoveDeclaration = (declaration) => {
+    const owner = mutationDeclarationOwner(declaration);
+    const file = resolve(declaration.getSourceFile().fileName);
+    return (
+      owner !== undefined &&
+      ts.isInterfaceDeclaration(owner) &&
+      owner.name.text === "Array" &&
+      propertyName(declaration.name, declaration.getSourceFile()) ===
+        "remove" &&
+      basename(file) === "obsidian.d.ts" &&
+      file.includes(`${join("node_modules", "obsidian")}/`) &&
+      defaultLibMutationOwner(declaration)
+    );
+  };
+  const exemptBuiltInMutationDeclaration = (declaration) =>
+    isTypeScriptDefaultLibDeclaration(declaration) ||
+    exactObsidianArrayRemoveDeclaration(declaration);
   const tupleBounds = (node) => {
     if (ts.isParenthesizedTypeNode(node)) return tupleBounds(node.type);
     if (
@@ -922,6 +939,8 @@ function scanWriterAuthorityTypes(records) {
     let minimum = 0;
     let maximum = 0;
     for (const parameter of declaration.parameters) {
+      if (ts.isIdentifier(parameter.name) && parameter.name.text === "this")
+        continue;
       if (parameter.dotDotDotToken !== undefined) {
         if (parameter.type === undefined) return undefined;
         const bounds = tupleBounds(parameter.type);
@@ -947,14 +966,14 @@ function scanWriterAuthorityTypes(records) {
         !member.declarations?.some(
           (declaration) =>
             inspectableDeclaration(declaration) &&
-            !defaultLibMutationOwner(declaration),
+            !exemptBuiltInMutationDeclaration(declaration),
         )
       )
         return false;
       return member.declarations.some((declaration) => {
         if (
           !inspectableDeclaration(declaration) ||
-          defaultLibMutationOwner(declaration)
+          exemptBuiltInMutationDeclaration(declaration)
         )
           return false;
         const memberType = checker.getTypeOfSymbolAtLocation(
@@ -1001,6 +1020,10 @@ function scanWriterAuthorityTypes(records) {
       const constraint = checker.getBaseConstraintOfType(type);
       result = constraint !== undefined && typeHasAuthority(constraint);
     }
+    if (!result && (type.objectFlags & ts.ObjectFlags.Reference) !== 0)
+      result = checker
+        .getTypeArguments(type)
+        .some((argument) => typeHasAuthority(argument));
     const symbol = type.aliasSymbol ?? type.getSymbol();
     const resolvedDeclaration = symbol?.declarations?.some(
       inspectableDeclaration,
@@ -1027,10 +1050,6 @@ function scanWriterAuthorityTypes(records) {
           ts.TypeFlags.Void)) ===
         0
     ) {
-      if ((type.objectFlags & ts.ObjectFlags.Reference) !== 0)
-        result = checker
-          .getTypeArguments(type)
-          .some((argument) => typeHasAuthority(argument));
       if (!result)
         result = checker.getPropertiesOfType(type).some((property) => {
           const declaration =
