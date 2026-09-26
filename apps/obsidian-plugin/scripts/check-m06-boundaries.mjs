@@ -1024,6 +1024,10 @@ function scanWriterAuthorityTypes(records) {
       result = checker
         .getTypeArguments(type)
         .some((argument) => typeHasAuthority(argument));
+    if (!result)
+      result = checker
+        .getIndexInfosOfType(type)
+        .some((indexInfo) => typeHasAuthority(indexInfo.type));
     const symbol = type.aliasSymbol ?? type.getSymbol();
     const resolvedDeclaration = symbol?.declarations?.some(
       inspectableDeclaration,

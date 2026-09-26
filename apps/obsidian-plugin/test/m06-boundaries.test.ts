@@ -19,6 +19,7 @@ import {
 const repositoryRoot = join(import.meta.dirname, "../../..");
 const pluginRoot = join(repositoryRoot, "apps/obsidian-plugin");
 const checker = join(pluginRoot, "scripts/check-m06-boundaries.mjs");
+const boundaryChildTimeoutMs = 15_000;
 const sentinel = "M06_SENTINEL_CONTENT_MUST_NOT_ESCAPE";
 const conversationFingerprint = `sha256:${"1".repeat(64)}`;
 const messageFingerprint = `sha256:${"2".repeat(64)}`;
@@ -51,16 +52,32 @@ const completeMutationMethods = [
   "writeFile",
 ] as const;
 
+function runBoundaryChild(
+  arguments_: string[],
+  timeoutMs = boundaryChildTimeoutMs,
+): string {
+  return execFileSync(process.execPath, arguments_, {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
+}
+
+function runM06Boundary(
+  arguments_: string[] = [],
+  timeoutMs = boundaryChildTimeoutMs,
+): string {
+  return runBoundaryChild([checker, ...arguments_], timeoutMs);
+}
+
 async function runAdversarialBoundary(source: string): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "c2v-m06-classifier-"));
   const fixture = join(directory, "knowledge-classifier-adversary.ts");
   await writeFile(fixture, source, "utf8");
   try {
-    execFileSync(process.execPath, [checker, "--adversarial-file", fixture], {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-      stdio: "pipe",
-    });
+    runM06Boundary(["--adversarial-file", fixture]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -76,11 +93,7 @@ async function runImportedAdversarialBoundary(
   await writeFile(authority, authoritySource, "utf8");
   await writeFile(consumer, consumerSource, "utf8");
   try {
-    execFileSync(process.execPath, [checker, "--adversarial-file", consumer], {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-      stdio: "pipe",
-    });
+    runM06Boundary(["--adversarial-file", consumer]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -218,13 +231,7 @@ vi.setConfig({ testTimeout: 15_000 });
 
 describe("M06 capability and privacy boundary", () => {
   it("passes the syntax-aware M06 static boundary checker", () => {
-    expect(() =>
-      execFileSync(process.execPath, [checker], {
-        cwd: repositoryRoot,
-        encoding: "utf8",
-        stdio: "pipe",
-      }),
-    ).not.toThrow();
+    expect(() => runM06Boundary()).not.toThrow();
   }, 15_000);
 
   it("retains the exact provider service and five-capability knowledge allowlists", () => {
@@ -343,15 +350,7 @@ describe("M06 capability and privacy boundary", () => {
     expect(aggregate).not.toContain("check-m05-runtime.mjs --artifacts-only");
     for (const checkerName of ["check-plugin.mjs", "check-m04-boundaries.mjs"])
       expect(() =>
-        execFileSync(
-          process.execPath,
-          [join(pluginRoot, "scripts", checkerName)],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
+        runBoundaryChild([join(pluginRoot, "scripts", checkerName)]),
       ).not.toThrow();
 
     const generalGate = readFileSync(
@@ -403,17 +402,7 @@ export function adversary(io: SourceVaultIO, fallback: SourceVaultIO, sourcePath
       "utf8",
     );
     try {
-      expect(() =>
-        execFileSync(
-          process.execPath,
-          [checker, "--adversarial-file", fixture],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
-      ).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -437,21 +426,12 @@ export const escaped = { nested: renamedWriter };`,
     );
     try {
       expect(() =>
-        execFileSync(
-          process.execPath,
-          [
-            checker,
-            "--adversarial-file",
-            consumer,
-            "--adversarial-file",
-            authority,
-          ],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
+        runM06Boundary([
+          "--adversarial-file",
+          consumer,
+          "--adversarial-file",
+          authority,
+        ]),
       ).toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
@@ -478,17 +458,7 @@ export const escaped = envelope;`,
       "utf8",
     );
     try {
-      expect(() =>
-        execFileSync(
-          process.execPath,
-          [checker, "--adversarial-file", consumer],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
-      ).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", consumer])).toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -508,17 +478,7 @@ export function adversary(writer: Writer, path: string, bytes: Uint8Array) {
       "utf8",
     );
     try {
-      expect(() =>
-        execFileSync(
-          process.execPath,
-          [checker, "--adversarial-file", fixture],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
-      ).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -544,17 +504,7 @@ export function adversary(path: string, bytes: Uint8Array) {
       "utf8",
     );
     try {
-      expect(() =>
-        execFileSync(
-          process.execPath,
-          [checker, "--adversarial-file", consumer],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
-      ).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", consumer])).toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -572,17 +522,7 @@ export function adversary(writer: Writer, sink: (value: unknown) => unknown) {
       "utf8",
     );
     try {
-      expect(() =>
-        execFileSync(
-          process.execPath,
-          [checker, "--adversarial-file", fixture],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
-      ).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -719,17 +659,7 @@ export const escaped = envelope;`,
       "utf8",
     );
     try {
-      expect(() =>
-        execFileSync(
-          process.execPath,
-          [checker, "--adversarial-file", consumer],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
-      ).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", consumer])).toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -801,6 +731,87 @@ export const inspected = { index, pending, readonlyValues, unique };`,
   });
 
   it.each([
+    ["Record", "Record<string, Writer>", 'indexed["writer"]'],
+    ["string index", "{ readonly [key: string]: Writer }", 'indexed["writer"]'],
+    ["number index", "{ readonly [key: number]: Writer }", "indexed[0]"],
+    [
+      "symbol index",
+      "{ readonly [key: symbol]: Writer }",
+      "indexed[Symbol.iterator]",
+    ],
+    [
+      "nested indexed container",
+      "{ readonly [key: string]: ReadonlyArray<Writer> }",
+      'indexed["writers"]',
+    ],
+  ])(
+    "rejects whole transfer of imported %s writer authority",
+    async (_name, indexedType) => {
+      await expect(
+        runImportedAdversarialBoundary(
+          `export interface Writer { write(path: string, bytes: Uint8Array): unknown }
+export declare const indexed: ${indexedType};`,
+          `import { indexed } from "./authority.js";
+export const escaped = indexed;`,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
+  it.each([
+    ["Record", "Record<string, Writer>", 'indexed["writer"]'],
+    ["string index", "{ readonly [key: string]: Writer }", 'indexed["writer"]'],
+    ["number index", "{ readonly [key: number]: Writer }", "indexed[0]"],
+    [
+      "symbol index",
+      "{ readonly [key: symbol]: Writer }",
+      "indexed[Symbol.iterator]",
+    ],
+    [
+      "nested indexed container",
+      "{ readonly [key: string]: ReadonlyArray<Writer> }",
+      'indexed["writers"]',
+    ],
+  ])(
+    "rejects computed extraction from imported %s writer authority",
+    async (_name, indexedType, access) => {
+      await expect(
+        runImportedAdversarialBoundary(
+          `export interface Writer { write(path: string, bytes: Uint8Array): unknown }
+export declare const indexed: ${indexedType};`,
+          `import { indexed } from "./authority.js";
+export const extracted = ${access};`,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
+  it("keeps imported read-only indexed values non-authority", async () => {
+    await expect(
+      runImportedAdversarialBoundary(
+        `export declare const record: Record<string, string>;
+export declare const strings: { readonly [key: string]: string };
+export declare const numbers: { readonly [key: number]: string };
+export declare const symbols: { readonly [key: symbol]: string };
+export declare const nested: { readonly [key: string]: ReadonlyArray<string> };`,
+        `import { nested, numbers, record, strings, symbols } from "./authority.js";
+export const inspected = {
+  record,
+  recordValue: record["key"],
+  strings,
+  stringValue: strings["key"],
+  numbers,
+  numberValue: numbers[0],
+  symbols,
+  symbolValue: symbols[Symbol.iterator],
+  nested,
+  nestedValue: nested["key"],
+};`,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
     ["Array", "interface Array<T>", "Array<string>"],
     ["Map", "interface Map<K, V>", "Map<string, string>"],
     ["Object", "interface Object", "Object"],
@@ -833,15 +844,17 @@ export function adversary(writer: Writer, path: string, bytes: Uint8Array, sink:
     ).rejects.toThrow();
   });
 
-  it("uses a bounded timeout for subprocess-heavy adversarial probes", () => {
-    const boundaryTests = readFileSync(
-      join(pluginRoot, "test/m06-boundaries.test.ts"),
-      "utf8",
-    );
-    const configurationCall = ["vi", "setConfig({ testTimeout: 15_000 })"].join(
-      ".",
-    );
-    expect(boundaryTests.split(configurationCall)).toHaveLength(2);
+  it("terminates boundary children within the configured subprocess bound", () => {
+    expect(boundaryChildTimeoutMs).toBe(15_000);
+    const startedAt = Date.now();
+    let failure: unknown;
+    try {
+      runBoundaryChild(["-e", "setInterval(() => undefined, 1_000)"], 100);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ code: "ETIMEDOUT", signal: "SIGKILL" });
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
   it("uses the SHA inventory and provider contribution comparator for M06", () => {
@@ -970,17 +983,7 @@ export function adversary(writer: Writer, path: string, bytes: Uint8Array, sink:
       "utf8",
     );
     try {
-      expect(() =>
-        execFileSync(
-          process.execPath,
-          [checker, "--adversarial-file", fixture],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
-      ).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -1030,17 +1033,7 @@ export function adversary(writer: Writer, path: string, bytes: Uint8Array, sink:
       "utf8",
     );
     try {
-      expect(() =>
-        execFileSync(
-          process.execPath,
-          [checker, "--adversarial-file", fixture],
-          {
-            cwd: repositoryRoot,
-            encoding: "utf8",
-            stdio: "pipe",
-          },
-        ),
-      ).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
