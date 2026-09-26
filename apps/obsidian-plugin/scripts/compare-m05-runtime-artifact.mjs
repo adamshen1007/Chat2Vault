@@ -100,6 +100,24 @@ export function compareM05RuntimeArtifacts(production, runtime) {
   };
 }
 
+export function compareTrackedReleaseArtifacts(built, tracked) {
+  const failures = [];
+  for (const file of ["main.js", "worker.js"]) {
+    const expected = built[file];
+    const actual = tracked[file];
+    if (
+      expected === undefined ||
+      actual === undefined ||
+      expected.bytes !== actual.bytes ||
+      expected.sha256 !== actual.sha256
+    )
+      failures.push(
+        `tracked ${file} does not match the final production build`,
+      );
+  }
+  return { ok: failures.length === 0, failures };
+}
+
 if (process.argv[1] === new URL(import.meta.url).pathname) {
   const [productionPath, runtimePath] = process.argv.slice(2);
   if (productionPath === undefined || runtimePath === undefined)

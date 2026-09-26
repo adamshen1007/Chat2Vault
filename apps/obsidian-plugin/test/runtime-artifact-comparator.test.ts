@@ -28,6 +28,10 @@ interface ComparatorModule {
       bytesInOutput?: number;
     };
   };
+  compareTrackedReleaseArtifacts(
+    built: Record<string, { bytes: number; sha256: string }>,
+    tracked: Record<string, { bytes: number; sha256: string }>,
+  ): { ok: boolean; failures: readonly string[] };
 }
 
 const pluginRoot = join(import.meta.dirname, "..");
@@ -84,6 +88,23 @@ afterEach(async () => {
 });
 
 describe("M05/M06 runtime artifact comparator", () => {
+  it("rejects a stale tracked main release artifact", async () => {
+    const result = (await comparator()).compareTrackedReleaseArtifacts(
+      {
+        "main.js": { bytes: 12, sha256: "a".repeat(64) },
+        "worker.js": { bytes: 8, sha256: "b".repeat(64) },
+      },
+      {
+        "main.js": { bytes: 12, sha256: "c".repeat(64) },
+        "worker.js": { bytes: 8, sha256: "b".repeat(64) },
+      },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual([
+      "tracked main.js does not match the final production build",
+    ]);
+  });
+
   it("rejects same-byte-count shared input substitution by SHA-256", async () => {
     const production = await record(
       {

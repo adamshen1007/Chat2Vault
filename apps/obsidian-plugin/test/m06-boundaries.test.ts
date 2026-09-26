@@ -188,7 +188,7 @@ describe("M06 capability and privacy boundary", () => {
         stdio: "pipe",
       }),
     ).not.toThrow();
-  });
+  }, 15_000);
 
   it("retains the exact provider service and five-capability knowledge allowlists", () => {
     expect(
@@ -270,12 +270,17 @@ describe("M06 capability and privacy boundary", () => {
     ]);
   });
 
-  it("keeps clean-check artifact validation independent of restored generated bundles", () => {
+  it("requires clean-check validation against the tracked release bundles", () => {
     const runner = readFileSync(
       join(pluginRoot, "scripts/check-m05-runtime.mjs"),
       "utf8",
     );
-    expect(runner).toContain('!process.argv.includes("--artifacts-only") &&');
+    expect(runner).not.toContain(
+      '!process.argv.includes("--artifacts-only") &&',
+    );
+    expect(runner).toContain("compareTrackedReleaseArtifacts(");
+    expect(runner).toContain('"main.js": production.artifact');
+    expect(runner).toContain('"worker.js": builtWorker');
     expect(runner).toContain('entryPoints: { worker: "src/worker.ts" }');
     expect(runner).toContain(
       'const worker = await readFile(join(directory, "worker.js"), "utf8");',
@@ -293,11 +298,12 @@ describe("M06 capability and privacy boundary", () => {
       "check-plugin.mjs",
       "check-m04-boundaries.mjs",
       "check-m05-boundaries.mjs",
-      "check-m05-runtime.mjs --artifacts-only",
+      "check-m05-runtime.mjs",
       "check-m06-boundaries.mjs",
       "check-m06-runtime.mjs --artifacts-only",
     ])
       expect(aggregate).toContain(command);
+    expect(aggregate).not.toContain("check-m05-runtime.mjs --artifacts-only");
     for (const checkerName of ["check-plugin.mjs", "check-m04-boundaries.mjs"])
       expect(() =>
         execFileSync(
@@ -310,6 +316,102 @@ describe("M06 capability and privacy boundary", () => {
           },
         ),
       ).not.toThrow();
+  });
+
+  it.each([
+    [
+      "logical authority",
+      "const disk = io || fallback; disk.write(sourcePath, original)",
+    ],
+    [
+      "constructor parameter property",
+      "class Box { constructor(private readonly disk: SourceVaultIO) {} mutate() { this.disk.write(sourcePath, original); } } new Box(io).mutate()",
+    ],
+    [
+      "new constructor argument",
+      "class Box { constructor(_disk: SourceVaultIO) {} } new Box(io)",
+    ],
+    ["spread argument", "sink(...[io])"],
+    [
+      "for-of authority",
+      "for (const disk of [io]) disk.write(sourcePath, original)",
+    ],
+    [
+      "default parameter",
+      "const use = (disk: SourceVaultIO = io) => disk.write(sourcePath, original); use()",
+    ],
+    [
+      "computed class field",
+      "class Box { [io as unknown as string] = 1 } void Box",
+    ],
+    ["tagged template", "tag`${io}`"],
+    [
+      "compound assignment",
+      "let disk: SourceVaultIO | undefined; disk ||= io; disk.write(sourcePath, original)",
+    ],
+  ])("rejects typed adversarial %s flow", async (_name, statement) => {
+    const directory = await mkdtemp(join(tmpdir(), "c2v-m06-typed-flow-"));
+    const fixture = join(directory, "knowledge-typed-adversary.ts");
+    await writeFile(
+      fixture,
+      `interface SourceVaultIO { write(path: string, bytes: Uint8Array): unknown }
+export function adversary(io: SourceVaultIO, fallback: SourceVaultIO, sourcePath: string, original: Uint8Array, sink: (...values: unknown[]) => unknown, tag: (strings: TemplateStringsArray, value: unknown) => unknown) { ${statement}; }`,
+      "utf8",
+    );
+    try {
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [checker, "--adversarial-file", fixture],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects cross-file imported writer authority", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "c2v-m06-cross-file-"));
+    const authority = join(directory, "knowledge-authority.ts");
+    const consumer = join(directory, "knowledge-consumer.ts");
+    await writeFile(
+      authority,
+      `export interface SourceVaultIO { write(path: string, bytes: Uint8Array): unknown }
+export declare const exportedWriter: SourceVaultIO;`,
+      "utf8",
+    );
+    await writeFile(
+      consumer,
+      `import { exportedWriter as renamedWriter } from "./knowledge-authority.js";
+export const escaped = { nested: renamedWriter };`,
+      "utf8",
+    );
+    try {
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [
+            checker,
+            "--adversarial-file",
+            consumer,
+            "--adversarial-file",
+            authority,
+          ],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("uses the SHA inventory and provider contribution comparator for M06", () => {

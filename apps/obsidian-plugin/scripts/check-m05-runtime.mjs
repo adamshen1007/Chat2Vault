@@ -17,7 +17,11 @@ import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import process from "node:process";
 import esbuild from "esbuild";
-import { compareM05RuntimeArtifacts } from "./compare-m05-runtime-artifact.mjs";
+import {
+  compareM05RuntimeArtifacts,
+  compareTrackedReleaseArtifacts,
+} from "./compare-m05-runtime-artifact.mjs";
+import { prepareOfficialRuntimeSources } from "./prepare-official-runtime-sources.mjs";
 
 const run = promisify(execFile);
 const pluginRoot = new URL("..", import.meta.url).pathname;
@@ -28,6 +32,19 @@ const exists = async (path) =>
     () => true,
     () => false,
   );
+
+function configuredManualFocusWaitMs() {
+  const raw = process.env.C2V_M05_MANUAL_FOCUS_WAIT_MS;
+  if (raw === undefined) return 250;
+  if (!/^[0-9]+$/u.test(raw))
+    throw new Error("C2V_M05_MANUAL_FOCUS_WAIT_MS must be an integer");
+  const manualFocusWaitMs = Number(raw);
+  if (manualFocusWaitMs < 250 || manualFocusWaitMs > 60_000)
+    throw new Error(
+      "C2V_M05_MANUAL_FOCUS_WAIT_MS must be between 250 and 60000",
+    );
+  return manualFocusWaitMs;
+}
 
 async function artifact(path) {
   const bytes = await readFile(path);
@@ -173,7 +190,11 @@ async function collectCodeSignature(appPath) {
   };
 }
 
-async function collectObsidianSourceMetadata(row, officialStable) {
+async function collectObsidianSourceMetadata(
+  row,
+  officialStable,
+  sourceEnvironment = process.env,
+) {
   const infoPlist = join(row.sourceApp, "Contents/Info.plist");
   const appVersion = (
     await run("/usr/bin/plutil", [
@@ -195,16 +216,16 @@ async function collectObsidianSourceMetadata(row, officialStable) {
     sourceFramework: row.hostInstrumentation.sourceFramework,
   };
   if (row.id === "minimum") {
-    const downloadPath = process.env.C2V_M06_MINIMUM_DMG;
+    const downloadPath = sourceEnvironment.C2V_M06_MINIMUM_DMG;
     if (downloadPath !== undefined) {
       source.kind = "official-dmg";
-      source.downloadUrl = process.env.C2V_M06_MINIMUM_DMG_URL;
+      source.downloadUrl = sourceEnvironment.C2V_M06_MINIMUM_DMG_URL;
       source.download = await artifact(downloadPath);
       source.codeSignature = await collectCodeSignature(row.sourceApp);
     }
   }
   if (row.id === "stable") {
-    const downloadPath = process.env.C2V_M06_STABLE_DOWNLOAD;
+    const downloadPath = sourceEnvironment.C2V_M06_STABLE_DOWNLOAD;
     if (downloadPath !== undefined) {
       source.kind = "official-stable-asar";
       source.metadataUrl = officialStable.metadataUrl;
@@ -234,6 +255,7 @@ async function buildEvidence(directory) {
     outdir: directory,
     entryNames: "worker",
   });
+  const builtWorker = await artifact(join(directory, "worker.js"));
   const worker = await readFile(join(directory, "worker.js"), "utf8");
   const buildOptions = {
     bundle: true,
@@ -272,16 +294,16 @@ async function buildEvidence(directory) {
   );
   const comparison = compareM05RuntimeArtifacts(production, runtime);
   if (!comparison.ok) throw new Error(comparison.failures.join("; "));
-  const trackedMain = await artifact(join(pluginRoot, "main.js"));
-  if (
-    !process.argv.includes("--artifacts-only") &&
-    (trackedMain.bytes !== production.artifact.bytes ||
-      trackedMain.sha256 !== production.artifact.sha256)
-  )
-    throw new Error(
-      "tracked main.js does not match the final production build",
-    );
-  return { production, runtime, comparison };
+  const releaseComparison = compareTrackedReleaseArtifacts(
+    { "main.js": production.artifact, "worker.js": builtWorker },
+    {
+      "main.js": await artifact(join(pluginRoot, "main.js")),
+      "worker.js": await artifact(join(pluginRoot, "worker.js")),
+    },
+  );
+  if (!releaseComparison.ok)
+    throw new Error(releaseComparison.failures.join("; "));
+  return { production, runtime, comparison, releaseComparison };
 }
 
 async function createCertificates(directory) {
@@ -593,8 +615,14 @@ async function evaluateChecked(
   return response.result?.result?.value;
 }
 
-function mainEvaluate(command, expression, stage, awaitPromise = false) {
-  return evaluateChecked(command, expression, stage, awaitPromise);
+function mainEvaluate(
+  command,
+  expression,
+  stage,
+  awaitPromise = false,
+  timeoutMs,
+) {
+  return evaluateChecked(command, expression, stage, awaitPromise, timeoutMs);
 }
 
 async function verifyStandaloneTls(port, caCertificate, destination) {
@@ -768,6 +796,7 @@ async function exerciseAccessibilityAndZoom(
   runtimePort,
   markProbeStage,
 ) {
+  const manualFocusWaitMs = configuredManualFocusWaitMs();
   let zoomStart;
   let result;
   let primaryFailure;
@@ -787,9 +816,10 @@ async function exerciseAccessibilityAndZoom(
     markProbeStage("ui-main-focus");
     const focus = await mainEvaluate(
       mainCommand,
-      `(async()=>{const electron=process.mainModule.require("electron");const contents=electron.webContents.fromId(${String(identity?.webContentsId ?? -1)});const window=electron.BrowserWindow.fromWebContents(contents);if(!contents||!window)throw new Error("exact Chat2Vault focus target unavailable");electron.app.focus({steal:true});window.show();window.focus();contents.focus();await new Promise((resolve)=>setTimeout(resolve,250));const result={visible:window.isVisible(),focused:window.isFocused(),contentsFocused:contents.isFocused()};if(!result.visible||!result.focused||!result.contentsFocused)throw new Error("Chat2Vault focus assertion failed");return result})()`,
+      `(async()=>{const electron=process.mainModule.require("electron");const contents=electron.webContents.fromId(${String(identity?.webContentsId ?? -1)});const window=electron.BrowserWindow.fromWebContents(contents);if(!contents||!window)throw new Error("exact Chat2Vault focus target unavailable");const deadline=Date.now()+${String(manualFocusWaitMs)};let result;do{electron.app.focus({steal:true});window.show();window.focus();contents.focus();await new Promise((resolve)=>setTimeout(resolve,250));result={visible:window.isVisible(),focused:window.isFocused(),contentsFocused:contents.isFocused()};if(result.visible&&result.focused&&result.contentsFocused)return result}while(Date.now()<deadline);throw new Error("Chat2Vault focus assertion failed")})()`,
       "ui-main-focus",
       true,
+      manualFocusWaitMs + 5_000,
     );
     Object.assign(zoomStart, focus);
     markProbeStage("ui-main-zoom-one");
@@ -898,7 +928,12 @@ async function exerciseAccessibilityAndZoom(
       ),
     );
     markProbeStage("ui-candidate-focus-traversal");
-    for (let index = 0; index < 4; index += 1)
+    await evaluateChecked(
+      rendererCommand,
+      `(()=>{const review=document.querySelector('.c2v-knowledge-review');const legacyPreview=document.querySelector('.c2v-candidate-preview');const legacyPagination=document.querySelector('[aria-label="Candidates per page"]');const candidates=review?.querySelectorAll('.c2v-knowledge-candidate');const sourceActions=[...document.querySelectorAll('.c2v-source button')].filter((button)=>!button.disabled&&button.getClientRects().length>0);const diagnostics=document.querySelector('.c2v-diagnostics > summary');if(!review||legacyPreview||legacyPagination||candidates?.length!==1||sourceActions.length!==0||diagnostics?.textContent!=="0 diagnostics")throw new Error("exact M06 review replacement unavailable");return true})()`,
+      "candidate-review-replacement",
+    );
+    for (let index = 0; index < 7; index += 1)
       candidateFocus.push(await dispatchTab(rendererCommand));
     const candidateReverse = await dispatchTab(rendererCommand, true);
     markProbeStage("ui-candidate-geometry");
@@ -933,8 +968,8 @@ async function exerciseAccessibilityAndZoom(
       settingsReverse === "Delete API key";
     const candidateFocusPassed =
       candidateFocus.join("|") ===
-        "Prepare manual prompt|Copy prompt|Paste strict JSON|Distill with provider|Candidates per page" &&
-      candidateReverse === "Distill with provider";
+        "Prepare manual prompt|Copy prompt|Paste strict JSON|Distill with provider|Accept|Edit|Reject|0 diagnostics" &&
+      candidateReverse === "Reject";
     result = {
       zoom: zoomStart,
       accessibility: {
@@ -1700,16 +1735,24 @@ try {
       `M05 runtime artifact gate passed (production=${evidenceBuild.production.artifact.sha256}; runtime=${evidenceBuild.runtime.artifact.sha256}).\n`,
     );
   } else {
+    const suppliedOfficialSources =
+      process.env.C2V_M05_OBSIDIAN_174_APP !== undefined &&
+      process.env.C2V_M05_OBSIDIAN_STABLE_ASAR !== undefined &&
+      process.env.C2V_M06_MINIMUM_DMG !== undefined &&
+      process.env.C2V_M06_STABLE_DOWNLOAD !== undefined;
+    const officialSourceEnvironment = suppliedOfficialSources
+      ? process.env
+      : { ...process.env, ...(await prepareOfficialRuntimeSources(root)) };
     const officialStable = await resolveOfficialStableMetadata();
     const authorities = await collectAuthorityEvidence();
     const macos = await collectMacosIdentity();
     const minimumApp =
-      process.env.C2V_M05_OBSIDIAN_174_APP ??
+      officialSourceEnvironment.C2V_M05_OBSIDIAN_174_APP ??
       "/private/tmp/chat2vault-m05-hosts/1.7.4/Obsidian.app";
     const stableApp =
       process.env.C2V_M05_OBSIDIAN_STABLE_APP ?? "/Applications/Obsidian.app";
     const stableAsar =
-      process.env.C2V_M05_OBSIDIAN_STABLE_ASAR ??
+      officialSourceEnvironment.C2V_M05_OBSIDIAN_STABLE_ASAR ??
       join(
         homedir(),
         `Library/Application Support/obsidian/obsidian-${officialStable.latestVersion}.asar`,
@@ -1857,6 +1900,7 @@ try {
         sourceMetadata: await collectObsidianSourceMetadata(
           rowInput,
           officialStable,
+          officialSourceEnvironment,
         ),
       };
       const result = await runRow(row, shared);

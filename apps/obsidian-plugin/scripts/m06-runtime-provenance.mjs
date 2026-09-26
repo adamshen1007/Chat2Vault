@@ -46,6 +46,8 @@ export const M06_EXPECTED_KNOWLEDGE = Object.freeze([
 
 export const MINIMUM_OFFICIAL_DMG_URL =
   "https://github.com/obsidianmd/obsidian-releases/releases/download/v1.7.4/Obsidian-1.7.4.dmg";
+export const MINIMUM_OFFICIAL_DMG_SHA256 =
+  "af77521f1df2ec1ce36d6609c17c325827934726b68cb31587357b356a510dbe";
 export const STABLE_METADATA_URL =
   "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/desktop-releases.json";
 
@@ -87,6 +89,7 @@ function validMinimum(version, source) {
     source.downloadUrl === MINIMUM_OFFICIAL_DMG_URL &&
     validArtifact(source.download) &&
     source.download.file === "Obsidian-1.7.4.dmg" &&
+    source.download.sha256 === MINIMUM_OFFICIAL_DMG_SHA256 &&
     signature?.identifier === "md.obsidian" &&
     signature.teamIdentifier === "6JSW4SJWN9" &&
     Array.isArray(signature.authorities) &&

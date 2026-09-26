@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import process from "node:process";
 import { URL } from "node:url";
 import ts from "typescript";
@@ -162,13 +162,16 @@ const pluginRecords = readdirSync(pluginSourceRoot)
 const knowledgePluginRecords = pluginRecords.filter((record) =>
   basename(record.file).startsWith("knowledge-"),
 );
-const adversarialIndex = process.argv.indexOf("--adversarial-file");
-if (adversarialIndex >= 0) {
-  const adversarialFile = process.argv[adversarialIndex + 1];
+const adversarialFiles = [];
+for (let index = 0; index < process.argv.length; index += 1) {
+  if (process.argv[index] !== "--adversarial-file") continue;
+  const adversarialFile = process.argv[index + 1];
   if (adversarialFile === undefined)
     failures.push("--adversarial-file requires a path");
-  else knowledgePluginRecords.push(parse(adversarialFile));
+  else adversarialFiles.push(resolve(adversarialFile));
 }
+for (const adversarialFile of adversarialFiles)
+  knowledgePluginRecords.push(parse(adversarialFile));
 const providerPluginRecords = pluginRecords.filter((record) =>
   ["provider-controller.ts", "provider-transport.ts", "keychain.ts"].includes(
     basename(record.file),
@@ -717,6 +720,460 @@ function scanKnowledgeMutations(record) {
   visit(record.source);
 }
 
+function scanWriterAuthorityTypes(records) {
+  const configPath = join(pluginRoot, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  if (config.error !== undefined) {
+    failures.push("M06 writer authority TypeScript config unavailable");
+    return;
+  }
+  const parsed = ts.parseJsonConfigFileContent(
+    config.config,
+    ts.sys,
+    pluginRoot,
+  );
+  const rootNames = [...new Set(records.map(({ file }) => resolve(file)))];
+  const program = ts.createProgram({
+    rootNames,
+    options: { ...parsed.options, noEmit: true },
+  });
+  const checker = program.getTypeChecker();
+  const authorityNames = new Set([
+    "AdapterContext",
+    "DataAdapter",
+    "FileManager",
+    "ObsidianKnowledgeVaultAdapter",
+    "SourceVaultIO",
+    "Vault",
+  ]);
+  const rawNames = new Set([
+    "DataAdapter",
+    "FileManager",
+    "SourceVaultIO",
+    "Vault",
+  ]);
+  const contextHelpers = new Set([
+    "discoverSourceRegistry",
+    "establishFinalRegistry",
+    "confirmTargetAbsent",
+    "normalizedRoots",
+    "readCompleteRegistrySnapshot",
+    "supported",
+    "targetState",
+    "verifyExistingRoot",
+    "verifyExistingRootSnapshot",
+  ]);
+  const destructuringHelpers = new Set([
+    "discoverSourceRegistry",
+    "readCompleteRegistrySnapshot",
+    "verifyExistingRoot",
+    "verifyExistingRootSnapshot",
+  ]);
+  const adapterPath = resolve(knowledgeAdapter.file);
+  const authorityCache = new Map();
+  const authorityVisiting = new Set();
+
+  const directTypeNames = (type) =>
+    new Set(
+      [type.aliasSymbol?.name, type.getSymbol()?.name].filter(
+        (name) => name !== undefined,
+      ),
+    );
+  const directKind = (type) => {
+    const names = directTypeNames(type);
+    if (names.has("AdapterContext")) return "context";
+    if (names.has("ObsidianKnowledgeVaultAdapter")) return "adapter";
+    if ([...names].some((name) => rawNames.has(name))) return "raw";
+    if (type.isUnionOrIntersection()) {
+      const kinds = new Set(type.types.map(directKind).filter(Boolean));
+      if (kinds.size === 1) return [...kinds][0];
+    }
+    return undefined;
+  };
+  const localSourceFiles = new Set(rootNames);
+  const typeHasAuthority = (type, depth = 0) => {
+    const cached = authorityCache.get(type);
+    if (cached !== undefined) return cached;
+    if (authorityVisiting.has(type) || depth > 12) return false;
+    authorityVisiting.add(type);
+    // Seed the cache before asking the checker for instantiated members. This
+    // is deliberately conservative for our local types while preventing
+    // recursive standard-library and Obsidian declarations from exploding.
+    authorityCache.set(type, false);
+    let result = [...directTypeNames(type)].some((name) =>
+      authorityNames.has(name),
+    );
+    if (!result && type.isUnionOrIntersection())
+      result = type.types.some((part) => typeHasAuthority(part, depth + 1));
+    if (!result && (type.flags & ts.TypeFlags.TypeParameter) !== 0) {
+      const constraint = checker.getBaseConstraintOfType(type);
+      result =
+        constraint !== undefined && typeHasAuthority(constraint, depth + 1);
+    }
+    const symbol = type.aliasSymbol ?? type.getSymbol();
+    const localDeclaration = symbol?.declarations?.some((declaration) =>
+      localSourceFiles.has(resolve(declaration.getSourceFile().fileName)),
+    );
+    const inspectStructure =
+      localDeclaration === true ||
+      symbol === undefined ||
+      (type.objectFlags & (ts.ObjectFlags.Anonymous | ts.ObjectFlags.Tuple)) !==
+        0;
+    if (
+      !result &&
+      inspectStructure &&
+      (type.flags &
+        (ts.TypeFlags.Any |
+          ts.TypeFlags.Unknown |
+          ts.TypeFlags.Never |
+          ts.TypeFlags.StringLike |
+          ts.TypeFlags.NumberLike |
+          ts.TypeFlags.BooleanLike |
+          ts.TypeFlags.BigIntLike |
+          ts.TypeFlags.ESSymbolLike |
+          ts.TypeFlags.Null |
+          ts.TypeFlags.Undefined |
+          ts.TypeFlags.Void)) ===
+        0
+    ) {
+      if ((type.objectFlags & ts.ObjectFlags.Reference) !== 0)
+        result = checker
+          .getTypeArguments(type)
+          .some((argument) => typeHasAuthority(argument, depth + 1));
+      if (!result)
+        result = checker.getPropertiesOfType(type).some((property) => {
+          const declaration =
+            property.valueDeclaration ?? property.declarations?.[0];
+          return (
+            declaration !== undefined &&
+            typeHasAuthority(
+              checker.getTypeOfSymbolAtLocation(property, declaration),
+              depth + 1,
+            )
+          );
+        });
+      if (!result)
+        for (const signature of [
+          ...type.getCallSignatures(),
+          ...type.getConstructSignatures(),
+        ]) {
+          if (typeHasAuthority(signature.getReturnType(), depth + 1)) {
+            result = true;
+            break;
+          }
+          if (
+            signature.getParameters().some((parameter) => {
+              const declaration =
+                parameter.valueDeclaration ?? parameter.declarations?.[0];
+              return (
+                declaration !== undefined &&
+                typeHasAuthority(
+                  checker.getTypeOfSymbolAtLocation(parameter, declaration),
+                  depth + 1,
+                )
+              );
+            })
+          ) {
+            result = true;
+            break;
+          }
+        }
+    }
+    authorityVisiting.delete(type);
+    authorityCache.set(type, result);
+    return result;
+  };
+  const declarationName = (declaration) => {
+    if (
+      (ts.isFunctionDeclaration(declaration) ||
+        ts.isMethodDeclaration(declaration)) &&
+      declaration.name !== undefined
+    )
+      return propertyName(declaration.name, declaration.getSourceFile());
+    return undefined;
+  };
+  const exactHelperCall = (call, argumentIndex) => {
+    const signature = checker.getResolvedSignature(call);
+    const declaration = signature?.getDeclaration();
+    if (
+      declaration === undefined ||
+      resolve(declaration.getSourceFile().fileName) !== adapterPath
+    )
+      return false;
+    const name = declarationName(declaration);
+    if (name === "nativePath") return argumentIndex === 0;
+    return contextHelpers.has(name) && argumentIndex === 0;
+  };
+  const enclosingDeclaration = (node, predicate) => {
+    let current = node.parent;
+    while (current !== undefined) {
+      if (predicate(current)) return current;
+      current = current.parent;
+    }
+    return undefined;
+  };
+  const exactContextConstruction = (node) => {
+    if (!ts.isObjectLiteralExpression(node)) return false;
+    const assignment = node.parent;
+    if (
+      !ts.isBinaryExpression(assignment) ||
+      assignment.right !== node ||
+      assignment.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
+      assignment.left.getText(node.getSourceFile()) !== "this.#context"
+    )
+      return false;
+    const constructor = enclosingDeclaration(
+      assignment,
+      ts.isConstructorDeclaration,
+    );
+    if (
+      constructor === undefined ||
+      !ts.isClassDeclaration(constructor.parent) ||
+      constructor.parent.name?.text !== "ObsidianKnowledgeVaultAdapter"
+    )
+      return false;
+    const expected = [
+      "io",
+      "native",
+      "sourceRoot",
+      "knowledgeRoot",
+      "platform",
+      "arch",
+    ];
+    return (
+      node.properties.every(
+        (property, index) =>
+          ts.isShorthandPropertyAssignment(property) &&
+          property.name.text === expected[index],
+      ) && node.properties.length === expected.length
+    );
+  };
+  const exactAlias = (node) => {
+    const declaration = node.parent;
+    if (
+      !ts.isVariableDeclaration(declaration) ||
+      declaration.initializer !== node
+    )
+      return false;
+    const source = node.getSourceFile();
+    if (
+      ts.isIdentifier(declaration.name) &&
+      declaration.name.text === "context" &&
+      node.getText(source) === "this.#context"
+    ) {
+      const method = enclosingDeclaration(declaration, ts.isMethodDeclaration);
+      return (
+        method !== undefined &&
+        propertyName(method.name, source) === "resolveKnowledgeSources"
+      );
+    }
+    if (
+      ts.isObjectBindingPattern(declaration.name) &&
+      declaration.name.getText(source) === "{ io, native }" &&
+      node.getText(source) === "context"
+    ) {
+      const helper = enclosingDeclaration(
+        declaration,
+        ts.isFunctionDeclaration,
+      );
+      return (
+        helper?.name !== undefined && destructuringHelpers.has(helper.name.text)
+      );
+    }
+    return false;
+  };
+  const exactCreate = (receiver) => {
+    const member = receiver.parent;
+    const call = member?.parent;
+    if (
+      !ts.isPropertyAccessExpression(member) ||
+      member.expression !== receiver ||
+      member.name.text !== "create" ||
+      !ts.isCallExpression(call) ||
+      call.expression !== member ||
+      call.arguments.length !== 2 ||
+      call.arguments[0]?.getText(receiver.getSourceFile()) !== "resolvedPath" ||
+      call.arguments[1]?.getText(receiver.getSourceFile()) !== "content"
+    )
+      return false;
+    const method = enclosingDeclaration(call, ts.isMethodDeclaration);
+    return (
+      method !== undefined &&
+      propertyName(method.name, receiver.getSourceFile()) ===
+        "createKnowledgeNote" &&
+      receiver.getText(receiver.getSourceFile()) === "this.#context.io"
+    );
+  };
+  const exactMemberRead = (node, type) => {
+    const member = node.parent;
+    if (
+      !ts.isPropertyAccessExpression(member) &&
+      !ts.isElementAccessExpression(member)
+    )
+      return false;
+    if (member.expression !== node) return false;
+    const key = ts.isPropertyAccessExpression(member)
+      ? member.name.text
+      : member.argumentExpression === undefined
+        ? undefined
+        : propertyName(member.argumentExpression, member.getSourceFile());
+    if (key === undefined) return false;
+    const kind = directKind(type);
+    if (kind === "raw") {
+      if (["basePath", "configDir"].includes(key)) return true;
+      if (["list", "readBinary"].includes(key))
+        return (
+          ts.isCallExpression(member.parent) &&
+          member.parent.expression === member
+        );
+      if (key === "create") return exactCreate(node);
+      return false;
+    }
+    if (kind === "context")
+      return [
+        "arch",
+        "io",
+        "knowledgeRoot",
+        "native",
+        "platform",
+        "sourceRoot",
+      ].includes(key);
+    if (kind === "adapter" && key === "checkpointKnowledgeTarget")
+      return (
+        ts.isCallExpression(member.parent) &&
+        member.parent.expression === member
+      );
+    return false;
+  };
+  const allowedAuthorityUse = (node, type) => {
+    if (resolve(node.getSourceFile().fileName) !== adapterPath) return false;
+    if (exactContextConstruction(node) || exactAlias(node)) return true;
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      exactContextConstruction(node.right)
+    )
+      return true;
+    if (exactMemberRead(node, type)) return true;
+    const parent = node.parent;
+    if (ts.isCallExpression(parent)) {
+      if (parent.expression === node) {
+        const declaration = checker
+          .getResolvedSignature(parent)
+          ?.getDeclaration();
+        return (
+          declaration !== undefined &&
+          resolve(declaration.getSourceFile().fileName) === adapterPath &&
+          (contextHelpers.has(declarationName(declaration)) ||
+            declarationName(declaration) === "nativePath")
+        );
+      }
+      const index = parent.arguments.indexOf(node);
+      if (index >= 0) return exactHelperCall(parent, index);
+    }
+    return false;
+  };
+  const isDeclarationIdentifier = (node) => {
+    if (!ts.isIdentifier(node) && !ts.isPrivateIdentifier(node)) return false;
+    const parent = node.parent;
+    return (
+      ((ts.isVariableDeclaration(parent) ||
+        ts.isParameter(parent) ||
+        ts.isBindingElement(parent) ||
+        ts.isFunctionDeclaration(parent) ||
+        ts.isFunctionExpression(parent) ||
+        ts.isArrowFunction(parent) ||
+        ts.isClassDeclaration(parent) ||
+        ts.isClassExpression(parent) ||
+        ts.isMethodDeclaration(parent) ||
+        ts.isPropertyDeclaration(parent) ||
+        ts.isPropertySignature(parent) ||
+        ts.isMethodSignature(parent) ||
+        ts.isInterfaceDeclaration(parent) ||
+        ts.isTypeAliasDeclaration(parent) ||
+        ts.isImportClause(parent) ||
+        ts.isImportSpecifier(parent) ||
+        ts.isNamespaceImport(parent)) &&
+        parent.name === node) ||
+      (ts.isPropertyAccessExpression(parent) && parent.name === node)
+    );
+  };
+  const isInsideTypeNode = (node) => {
+    let current = node;
+    while (current !== undefined && !ts.isStatement(current)) {
+      if (ts.isTypeNode(current)) return true;
+      current = current.parent;
+    }
+    return false;
+  };
+  const isEmbeddedAuthority = (node) => {
+    const parent = node.parent;
+    if (
+      (ts.isParenthesizedExpression(parent) ||
+        ts.isAsExpression(parent) ||
+        ts.isTypeAssertionExpression(parent) ||
+        ts.isNonNullExpression(parent) ||
+        ts.isSatisfiesExpression(parent) ||
+        ts.isAwaitExpression(parent)) &&
+      parent.expression === node
+    )
+      return typeHasAuthority(checker.getTypeAtLocation(parent));
+    if (
+      (ts.isPropertyAccessExpression(parent) ||
+        ts.isElementAccessExpression(parent)) &&
+      parent.expression === node
+    )
+      return typeHasAuthority(checker.getTypeAtLocation(parent));
+    if (
+      (ts.isBinaryExpression(parent) || ts.isConditionalExpression(parent)) &&
+      typeHasAuthority(checker.getTypeAtLocation(parent))
+    )
+      return true;
+    if (
+      (ts.isArrayLiteralExpression(parent) ||
+        ts.isObjectLiteralExpression(parent) ||
+        ts.isArrowFunction(parent) ||
+        ts.isFunctionExpression(parent)) &&
+      typeHasAuthority(checker.getTypeAtLocation(parent))
+    )
+      return true;
+    if (
+      (ts.isShorthandPropertyAssignment(parent) ||
+        ts.isPropertyAssignment(parent) ||
+        ts.isSpreadAssignment(parent)) &&
+      typeHasAuthority(checker.getTypeAtLocation(parent.parent))
+    )
+      return true;
+    return false;
+  };
+
+  for (const file of rootNames) {
+    const source = program.getSourceFile(file);
+    if (source === undefined) {
+      failures.push(`${basename(file)}: writer authority source unavailable`);
+      continue;
+    }
+    const visit = (node) => {
+      if (
+        ts.isExpression(node) &&
+        !isDeclarationIdentifier(node) &&
+        !isInsideTypeNode(node) &&
+        typeHasAuthority(checker.getTypeAtLocation(node)) &&
+        !isEmbeddedAuthority(node) &&
+        !allowedAuthorityUse(node, checker.getTypeAtLocation(node))
+      ) {
+        const line =
+          source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+        failures.push(
+          `${basename(file)}:${String(line)}: knowledge writer authority escapes declaration-bound allowlist (${node.getText(source).slice(0, 80)})`,
+        );
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+}
+
 for (const record of [...knowledgePluginRecords, ...knowledgeCoreRecords]) {
   const name = basename(record.file);
   const visit = (node) => {
@@ -764,6 +1221,7 @@ for (const record of [...knowledgePluginRecords, ...knowledgeCoreRecords]) {
   visit(record.source);
   scanKnowledgeMutations(record);
 }
+scanWriterAuthorityTypes([...knowledgePluginRecords, ...knowledgeCoreRecords]);
 
 const adapterCreateCalls = [];
 const adapterVisit = (node) => {

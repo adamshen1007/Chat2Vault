@@ -1,8 +1,8 @@
 # Milestone 06 Runtime Gate Report
 
-Version: 0.4-third-remediation-candidate
+Version: 0.5-final-remediation-candidate
 
-Date: 2026-09-23
+Date: 2026-09-26
 
 Decision: **PASS — Task 7 remediation is ready for a fresh independent R2 review; whole-M06 acceptance remains pending**
 
@@ -16,16 +16,17 @@ This report records the remediated M06 capability boundary and two-row macOS x86
 - Reviewed Task 7 commit/tree: `e585939e494cbdb5d8fbef536c5446c70615062e` / `e02e2684754d40f04b22f56da4993186ef57aace`
 - First remediation commit/tree: `ae80eb96ebc44b63010ad7a2bfb7d11d1822c5fa` / `d94265899baa290da81ab32bb1645dd280cb3739`
 - Second remediation commit/tree: `7ffbe404b3fa8649412c531ab0efab16fade8ba5` / `a0c4339dfb6838c629c2a0dfee8632abe57df061`
-- Third remediation commit/tree: recorded in the ignored Task 7 execution report after commit; a tracked file cannot embed its own commit hash
+- Third remediation commit/tree: `ca79c1605772e94b8a575024dd2b5636cff9eecc` / `0afc9a0f9916abf90f525498eee5e89840f03129`
+- Final remediation commit/tree: recorded in the ignored Task 7 execution report after commit; a tracked file cannot embed its own commit hash
 - Upstream: none configured
 - Host: macOS 15.7.9 (build 24G830), x86_64
 - Development runtime: Node.js 24.16.0; pnpm 11.7.0
 - Candidate input SHA-256: `bb95c304414b47a74ddd8f553484cf8723848b357283e62fc5d3982c82ec0c5c`
 - Qualified production `main.js` SHA-256: `ab9d32ef8367094ca71182eb5c76dc6667253811b7c53d8f0fa20d4034599e02`
 - Qualified worker SHA-256: `97d1e4f15d3e0600aaf554664075ba4469c96a6dbe5b89dcad65718777653735`
-- Qualified runtime-only bundle SHA-256: `48abbd197d592d4393ad8e7df75e577ee849b0bdf16b58d7a8f31aa28a571a54`
+- Qualified runtime-only bundle SHA-256: `f4d8fac3149b5cfc5398430b16d80c4911e4b524017b0aa7d320afc0b9afda3b`
 
-Both rows used identical candidate, production bundle, worker, manifest, styles, and native artifacts. Generated bundles were built for qualification and restored to their committed bytes afterward.
+Both rows used identical candidate, production bundle, worker, manifest, styles, and native artifacts. The generated `main.js` and `worker.js` were rebuilt from the final sources, matched the qualified identities above, and are retained for the authorized final Task 7 commit.
 
 ## Remediated safety boundary
 
@@ -36,6 +37,10 @@ The aggregate `check:plugin` chain now retains every prior gate:
 3. the dedicated M04 core/plugin clipboard and manual-view boundary;
 4. M05 production boundaries and the SHA-per-input/provider-output-contribution runtime comparator;
 5. M06 capability, mutation, privacy, and artifact checks.
+
+The aggregate gate now executes both official M05 runtime rows rather than substituting an artifacts-only check. The release-artifact predicate compares both tracked `main.js` and tracked `worker.js` against a fresh production build, and the M05 and M06 harnesses share one official-source preparer. Default focus behavior remains fail-fast and strict; the bounded `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000` operator assist used for this qualification only extends the assertion window. Both rows still require the exact Obsidian `BrowserWindow` and its `webContents` to report focused.
+
+M06 review mode structurally replaces the M05 candidate-preview/pagination surface. The host probe therefore asserts that the legacy preview and `Candidates per page` control are absent, exactly one synthetic M06 candidate is rendered, no source action is enabled for the unconfigured runtime fixture, and the complete focus order is `Prepare manual prompt` → `Copy prompt` → `Paste strict JSON` → `Distill with provider` → `Accept` → `Edit` → `Reject` → `0 diagnostics`, with exact reverse traversal to `Reject`. It does not skip arbitrary intervening controls or accept a count-only result.
 
 The M06 checker parses TypeScript structure rather than comment substrings. It enforces the exact seven provider service keys and exact five knowledge adapter capabilities. Knowledge code cannot import provider/network/source-mutation authority. Its mutation authority is shared with the runtime ledger and covers the complete installed Obsidian API plus prior conservative aliases: `append`, `appendBinary`, `appendFile`, `copy`, `create`, `createBinary`, `createFolder`, `delete`, `mkdir`, `modify`, `modifyBinary`, `process`, `remove`, `rename`, `rm`, `rmdir`, `trash`, `trashFile`, `trashLocal`, `trashSystem`, `truncate`, `unlink`, `write`, `writeBinary`, and `writeFile`. Conservative authority taint rejects both forbidden member references and whole-authority transfer through renamed or nested objects, arrays, public/private fields, constructor assignment, destructuring, subsequent reads, function arguments/returns, closures, optional/computed chains, and `.bind`/`.call`/`.apply`. Necessary production construction and local read-only helper calls are admitted only by exact TypeScript structure; the sole mutation exception is the exact two-argument destination call `this.#context.io.create(resolvedPath, content)` inside `createKnowledgeNote`.
 
@@ -75,8 +80,8 @@ The stable row resolves official metadata at execution time, validates its GitHu
 
 | Row     | Exact host identity                                                                 | Scenarios | Closed results                                                                             | Source SHA-256 before/after                                        | Canonical packet preimage                                                                                                                   | Result |
 | ------- | ----------------------------------------------------------------------------------- | --------: | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Minimum | Obsidian 1.7.4; Electron 31.6.0; Chromium 126.0.6478.234; Node 20.17.0; darwin x64  |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; post-fixture source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-minimum.json`](evidence/m06-runtime-minimum.json), SHA-256 `b111efdddcf985527b7396bcb80434977cafc9b287821261bf236e3dd0d45948` | PASS   |
-| Stable  | Obsidian 1.13.7; Electron 39.8.3; Chromium 142.0.7444.265; Node 22.22.1; darwin x64 |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; post-fixture source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-stable.json`](evidence/m06-runtime-stable.json), SHA-256 `1307e0a8a68a8c60aca78f47f119fe934036699f562201aa632f7fcdd3dc2d8c`   | PASS   |
+| Minimum | Obsidian 1.7.4; Electron 31.6.0; Chromium 126.0.6478.234; Node 20.17.0; darwin x64  |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; post-fixture source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-minimum.json`](evidence/m06-runtime-minimum.json), SHA-256 `bc8a6b3d07bc0affc3a08788128b33d14749dc0bb93f8ee3d98fd33f43ab1703` | PASS   |
+| Stable  | Obsidian 1.13.7; Electron 39.8.3; Chromium 142.0.7444.265; Node 22.22.1; darwin x64 |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; post-fixture source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-stable.json`](evidence/m06-runtime-stable.json), SHA-256 `7b8f9fb9688b01605defa0c4b1c1bc2101a50ea716a54a0a11b48d42d4dee29b`   | PASS   |
 
 The canonical JSON files are the exact sanitized packet preimages. Running `shasum -a 256` on each file reproduces the table values. They contain no trailing bytes outside the canonical JSON.
 
@@ -114,7 +119,7 @@ The retained knowledge evidence is identical in both rows:
 | `styles.css`                   |   6,911 | `f89ce612b62c0f0dffdf9c0884e246a26791634e49c8eb94b2e8c188426afce3` |
 | `native/source_observer.node`  |  41,352 | `ce334cb2dae22bb803bb0b9e5ef0b44b2359795e53b19c4852e837bfb04418f5` |
 | `native/keychain.node`         |  66,376 | `3751f72aa872aa3baae527d3242df2f1750f8c6e13fc91b4ca1b6aad70459c1a` |
-| runtime-only `runtime-test.js` | 277,118 | `48abbd197d592d4393ad8e7df75e577ee849b0bdf16b58d7a8f31aa28a571a54` |
+| runtime-only `runtime-test.js` | 277,118 | `f4d8fac3149b5cfc5398430b16d80c4911e4b524017b0aa7d320afc0b9afda3b` |
 
 ## Verification ledger
 
@@ -122,14 +127,14 @@ The retained knowledge evidence is identical in both rows:
 | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
 | Focused third-remediation RED run                                                                                              | RED: 15 failed and 37 passed tests, reproducing both findings               |
 | `pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m06-boundaries.test.ts test/m06-runtime-acceptance.test.ts`    | PASS: 2 files, 52 tests                                                     |
-| `pnpm check:m06`                                                                                                               | PASS: AST boundary plus 37 M06 tests                                        |
+| `pnpm check:m06`                                                                                                               | PASS: AST boundary plus 47 M06 tests                                        |
 | `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row minimum --evidence-file docs/evidence/m06-runtime-minimum.json` | PASS: official Obsidian 1.7.4, 9/9                                          |
 | `node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --row stable --evidence-file docs/evidence/m06-runtime-stable.json`   | PASS: official current stable 1.13.7, 9/9                                   |
 | `pnpm typecheck`                                                                                                               | PASS: core and plugin                                                       |
 | `pnpm lint`                                                                                                                    | PASS: full repository                                                       |
-| `pnpm test`                                                                                                                    | PASS: core 304 tests and plugin 683 tests                                   |
+| `pnpm test`                                                                                                                    | PASS: core 304 tests and plugin 695 tests                                   |
 | `pnpm build`                                                                                                                   | PASS: core and plugin; existing Security-framework deprecation warning only |
-| Generated-bundle restore followed by `pnpm check:plugin`                                                                       | PASS: full general/M03/M04/M05/M06 clean-state chain                        |
+| `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000 pnpm check:plugin`                                                                         | PASS: full general/M03/M04/two-row M05/M06 clean-state chain                |
 | `shasum -a 256 docs/evidence/m06-runtime-{minimum,stable}.json`                                                                | PASS: exact packet hashes reproduced                                        |
 
 ## Failure and remediation ledger
@@ -138,7 +143,7 @@ The retained knowledge evidence is identical in both rows:
 2. Independent R2 review found static and dynamic source-mutation blind spots. The checker now covers all Vault/DataAdapter mutation forms and aliases; the runtime wraps both surfaces and fails source attempts before execution.
 3. Independent R2 review found minimum provenance relied on `Info.plist`. Minimum now binds an authenticated official DMG hash and notarized signing identity; stable binds official metadata, compressed download, and loaded ASAR identities. Canonical tracked preimages make packet hashes independently reproducible.
 4. The first fresh DMG extraction used APFS clone copying across the mounted image and failed with `Cross-device link`. Replacing only that extraction step with `ditto` preserved the signed app and passed validation.
-5. The first real-row retry correctly stopped on a stale tracked generated bundle. A full plugin build established the qualified bundle identity; both rows then used it, and generated files were restored afterward.
+5. The first real-row retry correctly stopped on a stale tracked generated bundle. A full plugin build established the qualified bundle identity; both rows then used it. The earlier review phase restored generated files, while the final release-artifact remediation rebuilt and retained the exact qualified `main.js` and `worker.js` bytes for commit.
 6. Initial canonical files had a trailing newline, so file hashes differed from preimage hashes. The writer now emits exact canonical bytes, and both rows were rerun.
 7. Self-review found the first designated-requirement hash included a disposable executable path because `codesign` split output across streams. Parsing is now restricted to the `designated =>` line; the deterministic hash above was produced by the final minimum-first execution.
 8. The second R2 review found three omitted installed mutation APIs and reference-escape/runtime-sequencing bypasses. One canonical mutation authority now drives both checker and runtime, interception precedes view/adapter construction, and the exact 12-entry sequence is required.
@@ -147,8 +152,11 @@ The retained knowledge evidence is identical in both rows:
 11. The third R2 review found that whole writer authority could still cross container/class/function boundaries. Ten RED probes reproduced nested object, array, public/private field, constructor, return/pass-through, closure, destructuring, and optional-computed chains. Conservative authority taint plus narrow structural production exceptions closes them.
 12. The third R2 review found expected paths and hashes were derived from evidence under validation. The validator now owns the fixed synthetic source and three-path knowledge inventory; five negative tests cover wrong, duplicate, swapped, wrong-hash, and status/path-mismatch evidence.
 13. Two third-remediation stable attempts failed closed on asynchronous Obsidian profile writes: `.obsidian/workspace.json` during `conflict-fixture`, then `.obsidian/core-plugins.json` during `fixture-setup`. Bounded three-second inactive settles were added before fixture setup and scenario activation, still before M06 object construction. The final minimum-first/stable-second run passed without filtering or allowlisting either path and produced the canonical packets above.
+14. The release gate previously compared tracked `main.js` but not tracked `worker.js`, and aggregate `check:plugin` invoked M05 in artifacts-only mode. One shared tracked-release comparator now binds both artifacts, and the aggregate executes both official M05 rows before the M06 boundary and artifact gates.
+15. The first full two-row M05 execution exposed the frozen M05 focus expectation after M06 replaced the candidate-preview surface. The final probe asserts the complete deterministic M06 review-mode focus sequence and exact reverse edge, plus structural absence of legacy pagination, on both official hosts.
+16. macOS did not grant programmatic focus reliably on every attempt. The final run used the bounded operator-assist window, but evidence was accepted only after both the exact `BrowserWindow` and exact `webContents` focus assertions passed.
 
-No macOS TCC prompt or human-only blocker remained.
+No macOS TCC prompt remained. A visible operator click was required only to satisfy the strict focus assertion during the bounded qualification window.
 
 ## Privacy and scope review
 
@@ -165,6 +173,6 @@ The remediation changed only authorized Task 7 files plus the narrowly permitted
 - `docs/evidence/m06-runtime-minimum.json`
 - `docs/evidence/m06-runtime-stable.json`
 
-Narrow existing pre-M06 surfaces modified to preserve prior guarantees are `check-plugin.mjs`, `check-m04-boundaries.mjs`, `check-m05-runtime.mjs`, and `compare-m05-runtime-artifact.mjs`. Provider, core, knowledge production behavior, native code, dependencies, lockfile, README/index/Task 8 documents, generated committed artifacts, and M07 remain unchanged.
+Narrow existing pre-M06 surfaces modified to preserve prior guarantees are `check-plugin.mjs`, `check-m04-boundaries.mjs`, `check-m05-runtime.mjs`, and `compare-m05-runtime-artifact.mjs`. The final qualified generated `main.js` and `worker.js` are intentionally included. Provider, core, knowledge production behavior, native source, dependencies, lockfile, README/index/Task 8 documents, and M07 remain unchanged.
 
 The Task 7 remediation candidate is **GO for its authorized local commit and fresh independent R2 review**. Whole-M06 acceptance, publication, and M07 remain **NO-GO** until separate authorization.

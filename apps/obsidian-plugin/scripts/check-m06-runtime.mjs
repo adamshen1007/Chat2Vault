@@ -1,127 +1,21 @@
-/* global Buffer, fetch */
+/* global Buffer */
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import {
-  access,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { gunzip } from "node:zlib";
 import process from "node:process";
 import { URL } from "node:url";
-import {
-  MINIMUM_OFFICIAL_DMG_URL,
-  STABLE_METADATA_URL,
-  canonicalJson,
-} from "./m06-runtime-provenance.mjs";
+import { canonicalJson } from "./m06-runtime-provenance.mjs";
+import { prepareOfficialRuntimeSources } from "./prepare-official-runtime-sources.mjs";
 
 const run = promisify(execFile);
-const decompress = promisify(gunzip);
 const pluginRoot = new URL("..", import.meta.url).pathname;
 const repositoryRoot = resolve(pluginRoot, "../..");
 const legacyHarness = join(pluginRoot, "scripts/check-m05-runtime.mjs");
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-const exists = async (path) =>
-  access(path).then(
-    () => true,
-    () => false,
-  );
-
-async function download(url, destination) {
-  const partial = `${destination}.${randomUUID()}.partial`;
-  try {
-    await run("/usr/bin/curl", [
-      "--fail",
-      "--location",
-      "--proto",
-      "=https",
-      "--tlsv1.2",
-      "--silent",
-      "--show-error",
-      "--output",
-      partial,
-      url,
-    ]);
-    await rename(partial, destination);
-  } finally {
-    await rm(partial, { force: true });
-  }
-}
-
-async function prepareOfficialSources(directory) {
-  const cache = "/private/tmp/chat2vault-m06-official-1.7.4";
-  await mkdir(cache, { recursive: true });
-  const minimumDmg = join(cache, "Obsidian-1.7.4.dmg");
-  if (!(await exists(minimumDmg)))
-    await download(MINIMUM_OFFICIAL_DMG_URL, minimumDmg);
-  const dmgBytes = await readFile(minimumDmg);
-  if (dmgBytes.length < 1_000_000)
-    throw new Error("M06 minimum official DMG is incomplete");
-
-  const mount = join(directory, "minimum-dmg");
-  const minimumApp = join(directory, "official-minimum", "Obsidian.app");
-  await mkdir(mount, { recursive: true });
-  await mkdir(join(directory, "official-minimum"), { recursive: true });
-  let attached = false;
-  try {
-    await run("hdiutil", [
-      "attach",
-      "-readonly",
-      "-nobrowse",
-      "-mountpoint",
-      mount,
-      minimumDmg,
-    ]);
-    attached = true;
-    await run("/usr/bin/ditto", [join(mount, "Obsidian.app"), minimumApp]);
-  } finally {
-    if (attached) await run("hdiutil", ["detach", mount]);
-  }
-
-  const metadataResponse = await fetch(STABLE_METADATA_URL, {
-    cache: "no-store",
-    redirect: "error",
-  });
-  if (!metadataResponse.ok)
-    throw new Error(
-      `M06 stable metadata status ${String(metadataResponse.status)}`,
-    );
-  const metadata = JSON.parse(await metadataResponse.text());
-  const expectedAsset = `obsidian-${String(metadata.latestVersion)}.asar.gz`;
-  const stableUrl = new URL(String(metadata.downloadUrl));
-  if (
-    stableUrl.protocol !== "https:" ||
-    stableUrl.hostname !== "github.com" ||
-    !stableUrl.pathname.endsWith(
-      `/obsidianmd/obsidian-releases/releases/download/v${String(metadata.latestVersion)}/${expectedAsset}`,
-    )
-  )
-    throw new Error("M06 stable official asset URL invalid");
-  const stableDownload = join(directory, expectedAsset);
-  await download(stableUrl.href, stableDownload);
-  const compressed = await readFile(stableDownload);
-  const stableAsar = join(
-    directory,
-    `obsidian-${String(metadata.latestVersion)}.asar`,
-  );
-  await writeFile(stableAsar, await decompress(compressed));
-  return {
-    C2V_M05_OBSIDIAN_174_APP: minimumApp,
-    C2V_M05_OBSIDIAN_STABLE_ASAR: stableAsar,
-    C2V_M06_MINIMUM_DMG: minimumDmg,
-    C2V_M06_MINIMUM_DMG_URL: MINIMUM_OFFICIAL_DMG_URL,
-    C2V_M06_STABLE_DOWNLOAD: stableDownload,
-  };
 }
 
 function requestedRow() {
@@ -176,9 +70,15 @@ function buildDriver(source, row) {
   let driver = source;
   driver = replaceOnce(
     driver,
-    'import { compareM05RuntimeArtifacts } from "./compare-m05-runtime-artifact.mjs";\n',
-    `import { compareM05RuntimeArtifacts } from ${JSON.stringify(new URL("./compare-m05-runtime-artifact.mjs", import.meta.url).href)};\nimport { validateM06RuntimeEvidence, validateM06RuntimeProvenance } from ${JSON.stringify(new URL("./m06-runtime-provenance.mjs", import.meta.url).href)};\n`,
+    'import {\n  compareM05RuntimeArtifacts,\n  compareTrackedReleaseArtifacts,\n} from "./compare-m05-runtime-artifact.mjs";\n',
+    `import { compareM05RuntimeArtifacts, compareTrackedReleaseArtifacts } from ${JSON.stringify(new URL("./compare-m05-runtime-artifact.mjs", import.meta.url).href)};\nimport { validateM06RuntimeEvidence, validateM06RuntimeProvenance } from ${JSON.stringify(new URL("./m06-runtime-provenance.mjs", import.meta.url).href)};\n`,
     "legacy comparison import",
+  );
+  driver = replaceOnce(
+    driver,
+    'import { prepareOfficialRuntimeSources } from "./prepare-official-runtime-sources.mjs";\n',
+    `import { prepareOfficialRuntimeSources } from ${JSON.stringify(new URL("./prepare-official-runtime-sources.mjs", import.meta.url).href)};\n`,
+    "official source preparation import",
   );
   driver = replaceOnce(
     driver,
@@ -324,7 +224,7 @@ let failure;
 try {
   const officialSourceEnv = artifactsOnly
     ? {}
-    : await prepareOfficialSources(temporaryRoot);
+    : await prepareOfficialRuntimeSources(temporaryRoot);
   const legacySource = await readFile(legacyHarness, "utf8");
   await writeFile(driverPath, buildDriver(legacySource, row), { mode: 0o600 });
   const result = await run(

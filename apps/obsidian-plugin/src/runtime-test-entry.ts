@@ -465,7 +465,7 @@ async function settingsRecoveryMutexIdentityScenario(): Promise<{
     "identity persistence fulfillment",
   );
   const future = readSettings({
-    schemaVersion: 4,
+    schemaVersion: 5,
     previewMessagesPerPage: 10,
     sourceRoot: "Future",
   });

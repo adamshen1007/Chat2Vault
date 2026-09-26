@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 interface ProvenanceModule {
+  MINIMUM_OFFICIAL_DMG_SHA256: string;
   MINIMUM_OFFICIAL_DMG_URL: string;
   canonicalJson: (value: unknown) => string;
   validateM06RuntimeProvenance: (
@@ -23,7 +24,7 @@ async function provenance(): Promise<ProvenanceModule> {
 
 const hash = (digit: string): string => digit.repeat(64);
 
-function minimumSource(downloadUrl: string) {
+function minimumSource(downloadUrl: string, downloadSha256: string) {
   return {
     kind: "official-dmg",
     appVersion: "1.7.4",
@@ -31,7 +32,7 @@ function minimumSource(downloadUrl: string) {
     download: {
       file: "Obsidian-1.7.4.dmg",
       bytes: 177_000_000,
-      sha256: hash("1"),
+      sha256: downloadSha256,
     },
     codeSignature: {
       identifier: "md.obsidian",
@@ -88,13 +89,16 @@ describe("M06 runtime source provenance", () => {
   });
 
   it("accepts an exact official minimum download bound to notarized signing identity", async () => {
-    const { MINIMUM_OFFICIAL_DMG_URL, validateM06RuntimeProvenance } =
-      await provenance();
+    const {
+      MINIMUM_OFFICIAL_DMG_SHA256,
+      MINIMUM_OFFICIAL_DMG_URL,
+      validateM06RuntimeProvenance,
+    } = await provenance();
     expect(
       validateM06RuntimeProvenance(
         "minimum",
         "1.7.4",
-        minimumSource(MINIMUM_OFFICIAL_DMG_URL),
+        minimumSource(MINIMUM_OFFICIAL_DMG_URL, MINIMUM_OFFICIAL_DMG_SHA256),
       ),
     ).toEqual([]);
   });
