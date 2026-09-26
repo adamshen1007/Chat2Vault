@@ -203,6 +203,8 @@ export default class M05RuntimePlugin extends Plugin {
         },
         {
           sourceRoot: () => this.settings.sourceRoot,
+          sourceRootPending: () => false,
+          sourceSettingsGeneration: () => 1,
           knowledgeRoot: () => this.settings.knowledgeRoot,
           knowledgeRootPending: () => false,
           settingsGeneration: () => 1,

@@ -345,6 +345,21 @@ function wikilink(path: string): string {
   return `[[${escaped}]]`;
 }
 
+function sourceLink(path: string): string {
+  if (!path.includes("#")) return wikilink(path);
+  const withoutExtension = path.slice(0, -3);
+  const label = [...withoutExtension]
+    .map((point) =>
+      point === "\\" || point === "[" || point === "]" ? `\\${point}` : point,
+    )
+    .join("");
+  const destination = path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `[${label}](${destination})`;
+}
+
 export function safeKnowledgeFilename(
   title: string,
   candidateFingerprint: string,
@@ -416,7 +431,7 @@ export function renderKnowledgeNote(
     tags: data.tags,
     sourceRefs: data.sourceRefs,
   });
-  const links = ordered.map(({ sourceNotePath }) => wikilink(sourceNotePath));
+  const links = ordered.map(({ sourceNotePath }) => sourceLink(sourceNotePath));
   const providers = ordered.map(({ provider }) => provider);
   const sourceFingerprints = ordered.map(
     ({ conversationFingerprint }) => conversationFingerprint,

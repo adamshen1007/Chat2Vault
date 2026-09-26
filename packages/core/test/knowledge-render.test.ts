@@ -147,6 +147,24 @@ Derived from [[Sources/Synthetic \\[Source\\]]].
     );
   });
 
+  it("uses an exact Obsidian-compatible Markdown link when a source path contains #", () => {
+    const rendered = renderKnowledgeNote(reviewedCandidate(), [
+      resolvedSource({ sourceNotePath: "Sources#Archive/Roadmap#Q4.md" }),
+    ]);
+
+    expect(rendered.ok).toBe(true);
+    if (!rendered.ok) return;
+    expect(rendered.noteContent).toContain(
+      'source_conversation: "[Sources#Archive/Roadmap#Q4](Sources%23Archive/Roadmap%23Q4.md)"',
+    );
+    expect(rendered.noteContent).toContain(
+      "Derived from [Sources#Archive/Roadmap#Q4](Sources%23Archive/Roadmap%23Q4.md).",
+    );
+    expect(rendered.noteContent).not.toContain(
+      "[[Sources#Archive/Roadmap#Q4]]",
+    );
+  });
+
   it("uses portable fallback and sanitization without numeric suffixes", () => {
     const fingerprint = `sha256:${"a".repeat(64)}`;
     expect(safeKnowledgeFilename("../Hello", fingerprint)).toBe(

@@ -29,7 +29,10 @@ export interface KnowledgeControllerCurrent {
   importGeneration: number;
   selectionGeneration: number;
   distillationGeneration: number;
+  sourceSettingsGeneration: number;
   knowledgeSettingsGeneration: number;
+  sourceRootPending: boolean;
+  knowledgeRootPending: boolean;
   sourceRoot: string;
   knowledgeRoot: string;
 }
@@ -76,6 +79,11 @@ interface BaseToken extends KnowledgeControllerCurrent {
 interface InstalledPlan {
   token: BaseToken;
   plan: ExecutableKnowledgeWritePlan;
+}
+
+interface CandidateSourceAuthority {
+  sourceSettingsGeneration: number;
+  sourceRoot: string;
 }
 
 class BinaryMutex {
@@ -192,7 +200,10 @@ function currentSafely(
       importGeneration: current.importGeneration,
       selectionGeneration: current.selectionGeneration,
       distillationGeneration: current.distillationGeneration,
+      sourceSettingsGeneration: current.sourceSettingsGeneration,
       knowledgeSettingsGeneration: current.knowledgeSettingsGeneration,
+      sourceRootPending: current.sourceRootPending,
+      knowledgeRootPending: current.knowledgeRootPending,
       sourceRoot: current.sourceRoot,
       knowledgeRoot: current.knowledgeRoot,
     };
@@ -201,7 +212,10 @@ function currentSafely(
       Number.isSafeInteger(snapshot.importGeneration) &&
       Number.isSafeInteger(snapshot.selectionGeneration) &&
       Number.isSafeInteger(snapshot.distillationGeneration) &&
+      Number.isSafeInteger(snapshot.sourceSettingsGeneration) &&
       Number.isSafeInteger(snapshot.knowledgeSettingsGeneration) &&
+      typeof snapshot.sourceRootPending === "boolean" &&
+      typeof snapshot.knowledgeRootPending === "boolean" &&
       typeof snapshot.sourceRoot === "string" &&
       typeof snapshot.knowledgeRoot === "string"
       ? snapshot
@@ -222,7 +236,10 @@ function sameCurrent(
     left.importGeneration === right.importGeneration &&
     left.selectionGeneration === right.selectionGeneration &&
     left.distillationGeneration === right.distillationGeneration &&
+    left.sourceSettingsGeneration === right.sourceSettingsGeneration &&
     left.knowledgeSettingsGeneration === right.knowledgeSettingsGeneration &&
+    left.sourceRootPending === right.sourceRootPending &&
+    left.knowledgeRootPending === right.knowledgeRootPending &&
     left.sourceRoot === right.sourceRoot &&
     left.knowledgeRoot === right.knowledgeRoot
   );
@@ -260,6 +277,7 @@ export class KnowledgeController {
   private readonly previewMutex = new BinaryMutex();
   private readonly writeMutex = new BinaryMutex();
   private candidates: ReviewedKnowledgeCandidate[] = [];
+  private candidateSourceAuthority: CandidateSourceAuthority | undefined;
   private candidateGeneration = 0;
   private installed: InstalledPlan | undefined;
   private writeOwner = 0;
@@ -268,6 +286,7 @@ export class KnowledgeController {
   public constructor(private readonly services: KnowledgeControllerServices) {}
 
   public get snapshot(): KnowledgeControllerSnapshot {
+    if (!this.candidateAuthorityCurrent()) this.invalidate();
     if (
       this.installed !== undefined &&
       !this.tokenCurrent(this.installed.token)
@@ -293,9 +312,33 @@ export class KnowledgeController {
     return fingerprint(this.candidates);
   }
 
+  private candidateAuthorityCurrent(
+    current = currentSafely(this.services),
+  ): boolean {
+    if (this.candidates.length === 0)
+      return this.candidateSourceAuthority === undefined;
+    const authority = this.candidateSourceAuthority;
+    if (current === undefined || authority === undefined) return false;
+    return (
+      current.loaded &&
+      !current.sourceRootPending &&
+      current.sourceSettingsGeneration === authority.sourceSettingsGeneration &&
+      current.sourceRoot === authority.sourceRoot
+    );
+  }
+
   private token(): BaseToken | undefined {
     const current = currentSafely(this.services);
-    if (!current?.loaded) return undefined;
+    if (
+      !current?.loaded ||
+      current.sourceRootPending ||
+      current.knowledgeRootPending
+    )
+      return undefined;
+    if (!this.candidateAuthorityCurrent(current)) {
+      this.invalidate();
+      return undefined;
+    }
     return {
       ...current,
       candidateGeneration: this.candidateGeneration,
@@ -336,6 +379,10 @@ export class KnowledgeController {
       candidate: ReviewedKnowledgeCandidate,
     ) => ReviewedKnowledgeCandidate,
   ): boolean {
+    if (!this.candidateAuthorityCurrent()) {
+      this.invalidate();
+      return false;
+    }
     const index = this.candidates.findIndex((candidate) => candidate.id === id);
     const existing = this.candidates[index];
     if (index < 0 || existing === undefined) return false;
@@ -351,13 +398,23 @@ export class KnowledgeController {
 
   public installCandidates(candidates: readonly PreviewCandidate[]): boolean {
     const current = currentSafely(this.services);
-    if (current === undefined || !current.loaded || !Array.isArray(candidates))
+    if (
+      current === undefined ||
+      !current.loaded ||
+      current.sourceRootPending ||
+      current.knowledgeRootPending ||
+      !Array.isArray(candidates)
+    )
       return false;
     try {
       const reviews = candidates.map(createKnowledgeReview);
       if (new Set(reviews.map(({ id }) => id)).size !== reviews.length)
         return false;
       this.candidates = reviews.map(cloneCandidate);
+      this.candidateSourceAuthority = {
+        sourceSettingsGeneration: current.sourceSettingsGeneration,
+        sourceRoot: current.sourceRoot,
+      };
       this.candidateGeneration += 1;
       this.clearPlan();
       return true;
@@ -392,6 +449,10 @@ export class KnowledgeController {
   }
 
   public selectAllEligible(selected: boolean): boolean {
+    if (!this.candidateAuthorityCurrent()) {
+      this.invalidate();
+      return false;
+    }
     if (this.candidates.length === 0) return false;
     this.candidates = this.candidates.map((candidate) =>
       setKnowledgeSelected(candidate, selected),
@@ -403,6 +464,7 @@ export class KnowledgeController {
 
   public invalidate(): void {
     this.candidates = [];
+    this.candidateSourceAuthority = undefined;
     this.candidateGeneration += 1;
     this.installed = undefined;
     this.publish("empty", undefined);

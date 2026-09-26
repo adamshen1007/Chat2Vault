@@ -112,6 +112,8 @@ export interface ProviderViewServices extends Omit<
 
 export interface KnowledgeViewServices {
   sourceRoot(): string;
+  sourceRootPending(): boolean;
+  sourceSettingsGeneration(): number;
   knowledgeRoot(): string;
   knowledgeRootPending(): boolean;
   settingsGeneration(): number;
@@ -265,7 +267,11 @@ export class Chat2VaultView extends ItemView {
           importGeneration: this.importGeneration,
           selectionGeneration: this.selectionGeneration,
           distillationGeneration: this.distillationGeneration,
+          sourceSettingsGeneration:
+            knowledgeServices.sourceSettingsGeneration(),
           knowledgeSettingsGeneration: knowledgeServices.settingsGeneration(),
+          sourceRootPending: knowledgeServices.sourceRootPending(),
+          knowledgeRootPending: knowledgeServices.knowledgeRootPending(),
           sourceRoot: knowledgeServices.sourceRoot(),
           knowledgeRoot: knowledgeServices.knowledgeRoot(),
         }),
@@ -881,9 +887,13 @@ export class Chat2VaultView extends ItemView {
     const services = this.knowledgeServices;
     if (controller === undefined || services === undefined) return;
     const snapshot = controller.snapshot;
+    const sourcePending = services.sourceRootPending();
+    const knowledgePending = services.knowledgeRootPending();
+    const pending = sourcePending || knowledgePending;
     if (
       snapshot.candidates.length === 0 &&
-      this.knowledgeWriteResult === undefined
+      this.knowledgeWriteResult === undefined &&
+      !pending
     )
       return;
     const editBlocked =
@@ -896,11 +906,30 @@ export class Chat2VaultView extends ItemView {
     panel.createEl("p", {
       text: "Review validated candidates, select eligible notes, then run an exact dry-run before writing.",
     });
+    if (sourcePending)
+      panel.createEl("p", {
+        cls: "c2v-error",
+        text: "The source folder setting is still being saved.",
+      });
+    if (knowledgePending)
+      panel.createEl("p", {
+        cls: "c2v-error",
+        text: "The knowledge folder setting is still being saved.",
+      });
     if (snapshot.candidates.length === 0) {
       panel.createEl("p", {
         cls: "c2v-knowledge-status-label",
         text: "Review status: empty",
       });
+      if (pending) {
+        const actions = panel.createDiv({ cls: "c2v-knowledge-actions" });
+        const dryRun = this.button(actions, "Dry run", () => undefined);
+        dryRun.setAttr("aria-label", "Dry run selected knowledge candidates");
+        dryRun.disabled = true;
+        const write = this.button(actions, "Write", () => undefined);
+        write.setAttr("aria-label", "Write current ready knowledge plan");
+        write.disabled = true;
+      }
       if (this.knowledgeWriteResult !== undefined)
         this.drawKnowledgeLedger(panel, this.knowledgeWriteResult);
       return;
@@ -957,7 +986,6 @@ export class Chat2VaultView extends ItemView {
       services.sourceRoot(),
       services.knowledgeRoot(),
     );
-    const pending = services.knowledgeRootPending();
     const platformEligible = services.knowledgeWriterPlatformEligible();
     panel.createEl("p", {
       text:
@@ -965,11 +993,6 @@ export class Chat2VaultView extends ItemView {
           ? "Knowledge folder: not configured"
           : `Knowledge folder: ${services.knowledgeRoot()}`,
     });
-    if (pending)
-      panel.createEl("p", {
-        cls: "c2v-error",
-        text: "The knowledge folder setting is still being saved.",
-      });
     if (!platformEligible)
       panel.createEl("p", {
         cls: "c2v-error",
@@ -1000,6 +1023,7 @@ export class Chat2VaultView extends ItemView {
     });
     write.setAttr("aria-label", "Write current ready knowledge plan");
     write.disabled =
+      pending ||
       editBlocked ||
       snapshot.status !== "ready" ||
       snapshot.plan?.status !== "ready";

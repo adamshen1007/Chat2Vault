@@ -61,7 +61,10 @@ function currentState(): KnowledgeControllerCurrent {
     importGeneration: 1,
     selectionGeneration: 1,
     distillationGeneration: 1,
+    sourceSettingsGeneration: 1,
     knowledgeSettingsGeneration: 1,
+    sourceRootPending: false,
+    knowledgeRootPending: false,
     sourceRoot: "Sources",
     knowledgeRoot: "Knowledge",
   };
@@ -175,7 +178,10 @@ describe("M06 KnowledgeController", () => {
       "importGeneration",
       "selectionGeneration",
       "distillationGeneration",
+      "sourceSettingsGeneration",
       "knowledgeSettingsGeneration",
+      "sourceRootPending",
+      "knowledgeRootPending",
       "sourceRoot",
       "knowledgeRoot",
     ];
@@ -193,6 +199,85 @@ describe("M06 KnowledgeController", () => {
       });
       expect(controller.snapshot.plan, field).toBeUndefined();
     }
+  });
+
+  it.each(["success", "failure"] as const)(
+    "refuses candidate installation throughout a pending source-root save and keeps it fenced after %s settlement",
+    (settlement) => {
+      const { controller, mutate } = harness();
+      mutate({ sourceSettingsGeneration: 2, sourceRootPending: true });
+
+      expect(controller.installCandidates([previewCandidate()])).toBe(false);
+      expect(controller.snapshot).toMatchObject({
+        status: "empty",
+        candidates: [],
+        plan: undefined,
+      });
+
+      mutate({
+        sourceRootPending: false,
+        sourceRoot: settlement === "success" ? "Other sources" : "Sources",
+      });
+      expect(controller.snapshot).toMatchObject({
+        status: "empty",
+        candidates: [],
+        plan: undefined,
+      });
+    },
+  );
+
+  it.each(["success", "failure"] as const)(
+    "discards candidates installed before source-save start across %s settlement",
+    (settlement) => {
+      const { controller, mutate } = harness();
+      expect(controller.installCandidates([previewCandidate()])).toBe(true);
+
+      mutate({ sourceSettingsGeneration: 2, sourceRootPending: true });
+      expect(controller.snapshot.candidates).toEqual([]);
+
+      mutate({
+        sourceRootPending: false,
+        sourceRoot: settlement === "success" ? "Other sources" : "Sources",
+      });
+      expect(controller.snapshot).toMatchObject({
+        status: "empty",
+        candidates: [],
+        plan: undefined,
+      });
+    },
+  );
+
+  it("refuses preview while either relevant root save is pending", async () => {
+    for (const pending of [
+      "sourceRootPending",
+      "knowledgeRootPending",
+    ] as const) {
+      const { controller, mutate } = harness();
+      expect(controller.installCandidates([previewCandidate()])).toBe(true);
+      expect(controller.decide(candidateId, "accepted")).toBe(true);
+      expect(controller.select(candidateId, true)).toBe(true);
+      mutate({ [pending]: true });
+
+      expect(await controller.preview(), pending).toMatchObject({
+        status: "stale",
+        diagnostics: [{ code: "KNOWLEDGE_PLAN_STALE" }],
+      });
+      expect(controller.snapshot.plan).toBeUndefined();
+    }
+  });
+
+  it("refuses execution of a plan made stale by source-save start", async () => {
+    const { controller, mutate, bytes } = harness();
+    await ready(controller);
+
+    mutate({ sourceSettingsGeneration: 2, sourceRootPending: true });
+
+    expect(await controller.write()).toMatchObject({
+      status: "failed",
+      diagnostics: [{ code: "KNOWLEDGE_PLAN_STALE" }],
+    });
+    expect(bytes.size).toBe(0);
+    expect(controller.snapshot.plan).toBeUndefined();
   });
 
   it("uses binary preview arbitration and never installs a stale async settlement", async () => {

@@ -48,7 +48,7 @@ Type, confidence, ID, and provenance remain immutable. A first dirty edit immedi
 
 **Dry run** resolves the trusted source registry, observes every destination, and renders the exact path, action, and full Markdown for each selection. Actions are closed to `create`, `identical no-op`, or `conflict`. **Write** is enabled only for the complete current conflict-free plan.
 
-Any decision, edit, selection, source resolution, root, settings generation, candidate generation, view lifecycle, or plugin lifecycle change invalidates the plan. Planning and writing are separately non-queuing.
+Any decision, edit, selection, source resolution, root, settings generation, candidate generation, view lifecycle, or plugin lifecycle change invalidates the plan. Source-root and knowledge-root persistence pending state is part of controller authority: candidate installation, dry-run, and Write fail closed while either root save is pending, and source-save generation changes fence every older plan across both successful and failed settlement. Planning and writing are separately non-queuing.
 
 ### 2.4 Create-only, conflicts, partial failure, and retry
 
@@ -71,8 +71,8 @@ Eligible notes are created sequentially and read back byte-for-byte. There is no
 | §4.3 Source resolver         | `ObsidianKnowledgeVaultAdapter.resolveKnowledgeSources` and complete two-snapshot registry validation                                            | adapter tests for missing/ambiguous/stale/malformed/race cases                                                        |
 | §4.4 Writer adapter          | exact five-capability `KnowledgeVaultAdapter`; `observeKnowledgeTarget`, `checkpointKnowledgeTarget`, `createKnowledgeNote`, `readKnowledgeNote` | adapter capability test, M06 static checker, runtime mutation ledger                                                  |
 | §5 Data/identity             | canonical review contracts, candidate/source fingerprints, 240-byte filename, root collision rules                                               | review/render/planner vectors and Unicode/path cases                                                                  |
-| §5.4 Settings migration      | `Chat2VaultSettingsV4`, `readSettings`, `SettingsController.saveKnowledgeRoot`, `knowledgeWriteGeneration`                                       | `settings-model.test.ts`, `main.test.ts`                                                                              |
-| §6 Markdown                  | `renderKnowledgeNote` fixed schema/frontmatter/body/backlinks and escaping                                                                       | golden single/multi-source render tests; `source-backlink` runtime scenario                                           |
+| §5.4 Settings migration      | `Chat2VaultSettingsV4`, `readSettings`, root persistence states, `sourceWriteGeneration`, `knowledgeWriteGeneration`                             | settings/main/controller pending-save and settlement tests                                                            |
+| §6 Markdown                  | `renderKnowledgeNote` fixed schema/frontmatter/body/backlinks; exact URL-encoded Markdown fallback for source paths containing `#`               | golden single/multi-source and `#` root/filename render tests; Obsidian view/write integration; runtime backlink row  |
 | §7 Write semantics           | frozen `ExecutableKnowledgeWritePlan`; `executeKnowledgeWrite`; controller consumes plan before await                                            | executor/controller race, preflight, partial ledger, retry, and no-op tests                                           |
 | §8 Privacy/error handling    | fixed diagnostics, text-only sinks, settings/log boundary checks, provider isolation                                                             | `view.test.ts`, `m06-boundaries.test.ts`, privacy scans, canonical evidence packets                                   |
 | §9 Verification              | `check-m06-boundaries.mjs`, `check-m06-runtime.mjs`, provenance and artifact comparators                                                         | 95-test M06 gate, full core/plugin suites, official two-row runtime report                                            |
@@ -173,9 +173,10 @@ No file was removed. The exact final `git diff --name-status` inventory and file
 - Imported/source/model text remains untrusted data. Review edits require exact own data fields, bounded NFC strings, closed tags, and detached arrays.
 - The core constructs paths and Markdown without Obsidian APIs. Candidate text cannot choose a root, source path, frontmatter key, or extra destination.
 - Source paths come only from a complete, stable, direct-child M03 registry snapshot with repeated physical containment checks. Model-suggested backlink paths are never trusted.
+- Source paths containing `#` use a standard Markdown link with a percent-encoded destination because Obsidian reserves `#` as the wikilink subpath delimiter; the displayed provenance remains the exact vault-relative source path.
 - The knowledge adapter exposes exactly resolve, observe, checkpoint, create, and read. It exposes no modify, rename, delete, source-create, provider, network, or general filesystem capability.
 - Provider service keys remain exactly the M05 allowlist. Provider execution receives no writer, vault, source-registry, or filesystem object.
-- Write authority is the exact frozen current dry-run. It is consumed synchronously before asynchronous execution and cannot be queued or reinstated by a stale settlement.
+- Write authority is the exact frozen current dry-run. It includes both root-save generations and pending states, is consumed synchronously before asynchronous execution, and cannot be queued or reinstated by a stale settlement.
 - Static analysis rejects mutation authority hidden behind renamed/computed members, imported wrappers, generic/indexed containers, fields, arguments, returns, closures, destructuring, or callable aliases. Traversal is cycle-safe and fails closed on indeterminate authority or resource exhaustion.
 - Runtime interception covers the complete installed Obsidian mutation surface before application objects capture it. The fixed sequence proves no source mutation and only the intended destination creates.
 - Diagnostics, settings, logs, and retained evidence exclude candidate/source content, rendered user notes, prompts, responses, credentials, absolute paths, usernames, machine/vault names, and real exports.
@@ -183,14 +184,14 @@ No file was removed. The exact final `git diff --name-status` inventory and file
 
 ## 7. Verification and runtime evidence
 
-The final Task 8 gate runs the exact targeted suites, Node/pnpm identity checks, `pnpm verify`, whole-branch scope/diff/untracked scans, credential/private-key scan, privacy scan, canonical evidence hashes, and a separate self-review of migration, immutable authority, source resolution, every async invalidation edge, capabilities, persistence/log sinks, and runtime evidence. Exact final commands, counts, hashes, and outcomes are appended to `docs/21_M06_RUNTIME_GATE_REPORT.md` and the ignored Task 8 report after the stabilized run.
+The final R2-remediation gate runs the exact targeted suites, Node/pnpm identity checks, `pnpm verify`, whole-branch scope/diff/untracked scans, credential/private-key scan, privacy scan, canonical evidence hashes, and a separate self-review of migration, immutable authority, source resolution, every async invalidation edge, capabilities, persistence/log sinks, and runtime evidence. Core 305/305, plugin 751/751, formatting, lint, strict typecheck, build, M06 boundary 95/95, and both official M06 9/9 rows passed. The fresh aggregate M05 host row remains blocked only on the fail-closed macOS foreground-focus assertion; exact outcomes are recorded in `docs/21_M06_RUNTIME_GATE_REPORT.md` and the ignored Task 8 report.
 
 The already-qualified official runtime matrix is:
 
-- minimum: Obsidian 1.7.4, 9/9 scenarios, canonical packet SHA-256 `bc8a6b3d07bc0affc3a08788128b33d14749dc0bb93f8ee3d98fd33f43ab1703`;
-- stable: Obsidian 1.13.7, 9/9 scenarios, canonical packet SHA-256 `7b8f9fb9688b01605defa0c4b1c1bc2101a50ea716a54a0a11b48d42d4dee29b`;
+- minimum: Obsidian 1.7.4, 9/9 scenarios, canonical packet SHA-256 `cca225740e3d2afb00c1d827117f92910aa31bc1a1d6f7dc32ea49b994f83003`;
+- stable: Obsidian 1.13.7, 9/9 scenarios, canonical packet SHA-256 `2d5a9eb67191877ca3c97edd4e5ca11f8b13a6785e5d0e5ca5eb085cd589442c`;
 - both rows: two creates, two identical no-ops, one conflict, zero M06 provider calls, zero post-fixture source mutation attempts, and identical source SHA-256 before/after;
-- qualified production artifacts: `main.js` SHA-256 `ab9d32ef8367094ca71182eb5c76dc6667253811b7c53d8f0fa20d4034599e02`; `worker.js` SHA-256 `97d1e4f15d3e0600aaf554664075ba4469c96a6dbe5b89dcad65718777653735`.
+- qualified production artifacts: `main.js` SHA-256 `54371facb236c4e8a7f1195616207f64d915c3a3c26ee6d232a183672c4fbac4`; `worker.js` SHA-256 `97d1e4f15d3e0600aaf554664075ba4469c96a6dbe5b89dcad65718777653735`.
 
 ## 8. Known limitations and residual gates
 
@@ -200,6 +201,7 @@ The already-qualified official runtime matrix is:
 - Knowledge roots must already exist; M06 does not create destination folders.
 - Source notes remain immutable, so they receive no forward links to knowledge notes.
 - The native Keychain build retains the existing macOS Security-framework deprecation warning; M06 does not change that module.
+- The fresh aggregate M05 runtime row still requires a timely physical foreground click on the exact Obsidian host; PID-targeted programmatic activation did not satisfy the independent BrowserWindow/webContents focus assertion in this run.
 - The final fresh independent R2 review is intentionally performed after the exact documentation commit by the parent task. Until it returns the required token, milestone acceptance remains conditional.
 
 ## 9. Explicit non-goals preserved

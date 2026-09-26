@@ -213,6 +213,11 @@ export default class Chat2VaultPlugin extends Plugin {
           sourceRoot: () =>
             this.settingsController?.settings.sourceRoot ??
             this.settings.sourceRoot,
+          sourceRootPending: () =>
+            this.settingsController?.sourceRootPersistenceState.status ===
+            "pending",
+          sourceSettingsGeneration: () =>
+            this.settingsController?.sourceWriteGeneration ?? 0,
           knowledgeRoot: () =>
             this.settingsController?.settings.knowledgeRoot ??
             this.settings.knowledgeRoot,

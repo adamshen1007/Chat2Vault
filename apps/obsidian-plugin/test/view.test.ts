@@ -209,6 +209,10 @@ async function openKnowledgeView(
     failCreateAt?: number;
     invalidateOnCreate?: boolean;
     candidateCount?: number;
+    sourceRoot?: string;
+    sourcePath?: string;
+    sourceRootPending?: boolean;
+    knowledgeRootPending?: boolean;
   } = {},
 ): Promise<{
   view: Chat2VaultView;
@@ -229,7 +233,7 @@ async function openKnowledgeView(
       sources: candidate.sourceRefs.map((sourceRef) => ({
         ...sourceRef,
         messageFingerprints: [...sourceRef.messageFingerprints],
-        sourceNotePath: "Sources/synthetic-source.md",
+        sourceNotePath: options.sourcePath ?? "Sources/synthetic-source.md",
       })),
     }),
     observeKnowledgeTarget: async (path) => {
@@ -261,9 +265,11 @@ async function openKnowledgeView(
     },
   };
   const knowledgeServices: KnowledgeViewServices = {
-    sourceRoot: () => "Sources",
+    sourceRoot: () => options.sourceRoot ?? "Sources",
+    sourceRootPending: () => options.sourceRootPending ?? false,
+    sourceSettingsGeneration: () => 1,
     knowledgeRoot: () => options.knowledgeRoot ?? "Knowledge",
-    knowledgeRootPending: () => false,
+    knowledgeRootPending: () => options.knowledgeRootPending ?? false,
     settingsGeneration: () => 1,
     knowledgeWriterPlatformEligible: () => true,
     adapter,
@@ -697,6 +703,62 @@ describe("preview view", () => {
       ).find((button) => button.textContent === "Dry run")?.disabled,
     ).toBe(true);
     await unconfigured.view.onClose();
+  });
+
+  it("keeps dry-run and write disabled while the source-root save is pending", async () => {
+    const options = { sourceRootPending: false };
+    const { view, created } = await openKnowledgeView(options);
+    const button = (label: string): HTMLButtonElement | undefined =>
+      Array.from(
+        view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((candidate) => candidate.textContent === label);
+
+    options.sourceRootPending = true;
+    button("Accept")?.click();
+
+    expect(view.contentEl.textContent).toContain(
+      "The source folder setting is still being saved.",
+    );
+    expect(button("Dry run")?.disabled).toBe(true);
+    expect(button("Write")?.disabled).toBe(true);
+    expect(created.size).toBe(0);
+    await view.onClose();
+  });
+
+  it("renders and writes exact Markdown provenance for a source path containing #", async () => {
+    const { view, created } = await openKnowledgeView({
+      sourceRoot: "Sources#Archive",
+      sourcePath: "Sources#Archive/Roadmap#Q4.md",
+    });
+    const button = (label: string): HTMLButtonElement | undefined =>
+      Array.from(
+        view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((candidate) => candidate.textContent === label);
+    button("Accept")?.click();
+    view.contentEl
+      .querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )
+      ?.click();
+    button("Dry run")?.click();
+    await flush();
+
+    const preview = view.contentEl.querySelector(
+      ".c2v-knowledge-plan pre > code",
+    )?.textContent;
+    expect(preview).toContain(
+      "[Sources#Archive/Roadmap#Q4](Sources%23Archive/Roadmap%23Q4.md)",
+    );
+    button("Write")?.click();
+    await flush();
+    const written = [...created.values()].map((bytes) =>
+      new TextDecoder().decode(bytes),
+    );
+    expect(written).toHaveLength(1);
+    expect(written[0]).toContain(
+      "[Sources#Archive/Roadmap#Q4](Sources%23Archive/Roadmap%23Q4.md)",
+    );
+    await view.onClose();
   });
 
   it("blocks conflicts, writes only a current ready plan, and renders the complete content-free ledger", async () => {
@@ -1443,6 +1505,8 @@ describe("preview view", () => {
         },
         {
           sourceRoot: () => "Sources",
+          sourceRootPending: () => false,
+          sourceSettingsGeneration: () => 1,
           knowledgeRoot: () => "Knowledge",
           knowledgeRootPending: () => false,
           settingsGeneration: () => 1,
