@@ -316,6 +316,13 @@ describe("M06 capability and privacy boundary", () => {
           },
         ),
       ).not.toThrow();
+
+    const generalGate = readFileSync(
+      join(pluginRoot, "scripts/check-plugin.mjs"),
+      "utf8",
+    );
+    expect(generalGate).toContain("ts.isElementAccessExpression(node)");
+    expect(generalGate).toContain("forbiddenVaultMutationAccess(node)");
   });
 
   it.each([
@@ -402,6 +409,136 @@ export const escaped = { nested: renamedWriter };`,
             "--adversarial-file",
             authority,
           ],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a single-root consumer importing a non-root writer envelope", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "c2v-m06-imported-envelope-"),
+    );
+    const authority = join(directory, "authority.ts");
+    const consumer = join(directory, "knowledge-consumer.ts");
+    await writeFile(
+      authority,
+      `export interface Writer { write(path: string, bytes: Uint8Array): unknown }
+export interface WriterEnvelope { writer: Writer }
+export declare const envelope: WriterEnvelope;`,
+      "utf8",
+    );
+    await writeFile(
+      consumer,
+      `import { envelope } from "./authority.js";
+export const escaped = envelope;`,
+      "utf8",
+    );
+    try {
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [checker, "--adversarial-file", consumer],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a renamed structural writer computed mutation call", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "c2v-m06-structural-writer-"),
+    );
+    const fixture = join(directory, "knowledge-structural-writer.ts");
+    await writeFile(
+      fixture,
+      `interface Writer { write(path: string, bytes: Uint8Array): unknown }
+export function adversary(writer: Writer, path: string, bytes: Uint8Array) {
+  writer["write"](path, bytes);
+}`,
+      "utf8",
+    );
+    try {
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [checker, "--adversarial-file", fixture],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an imported envelope writer computed mutation call", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "c2v-m06-envelope-call-"));
+    const authority = join(directory, "authority.ts");
+    const consumer = join(directory, "knowledge-consumer.ts");
+    await writeFile(
+      authority,
+      `export interface Writer { write(path: string, bytes: Uint8Array): unknown }
+export interface Envelope { writer: Writer }
+export declare const envelope: Envelope;`,
+      "utf8",
+    );
+    await writeFile(
+      consumer,
+      `import { envelope } from "./authority.js";
+export function adversary(path: string, bytes: Uint8Array) {
+  envelope.writer["write"](path, bytes);
+}`,
+      "utf8",
+    );
+    try {
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [checker, "--adversarial-file", consumer],
+          {
+            cwd: repositoryRoot,
+            encoding: "utf8",
+            stdio: "pipe",
+          },
+        ),
+      ).toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects whole-object transfer of a structurally named writer", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "c2v-m06-writer-transfer-"));
+    const fixture = join(directory, "knowledge-writer-transfer.ts");
+    await writeFile(
+      fixture,
+      `interface Writer { write(path: string, bytes: Uint8Array): unknown }
+export function adversary(writer: Writer, sink: (value: unknown) => unknown) {
+  sink(writer);
+}`,
+      "utf8",
+    );
+    try {
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [checker, "--adversarial-file", fixture],
           {
             cwd: repositoryRoot,
             encoding: "utf8",

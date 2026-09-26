@@ -738,14 +738,6 @@ function scanWriterAuthorityTypes(records) {
     options: { ...parsed.options, noEmit: true },
   });
   const checker = program.getTypeChecker();
-  const authorityNames = new Set([
-    "AdapterContext",
-    "DataAdapter",
-    "FileManager",
-    "ObsidianKnowledgeVaultAdapter",
-    "SourceVaultIO",
-    "Vault",
-  ]);
   const rawNames = new Set([
     "DataAdapter",
     "FileManager",
@@ -770,6 +762,9 @@ function scanWriterAuthorityTypes(records) {
     "verifyExistingRootSnapshot",
   ]);
   const adapterPath = resolve(knowledgeAdapter.file);
+  const sourceAdapterPath = resolve(
+    join(pluginSourceRoot, "source-vault-adapter.ts"),
+  );
   const authorityCache = new Map();
   const authorityVisiting = new Set();
 
@@ -779,18 +774,134 @@ function scanWriterAuthorityTypes(records) {
         (name) => name !== undefined,
       ),
     );
+  const typeDeclarations = (type) => [
+    ...(type.aliasSymbol?.declarations ?? []),
+    ...(type.getSymbol()?.declarations ?? []),
+  ];
+  const declaredExactly = (type, expectedName, sourcePredicate) =>
+    directTypeNames(type).has(expectedName) &&
+    typeDeclarations(type).some((declaration) =>
+      sourcePredicate(resolve(declaration.getSourceFile().fileName)),
+    );
+  const declaredInPluginAdapter = (type, expectedName) =>
+    declaredExactly(
+      type,
+      expectedName,
+      (file) => file === adapterPath || file === sourceAdapterPath,
+    );
+  const declaredInObsidian = (type, expectedName) =>
+    declaredExactly(
+      type,
+      expectedName,
+      (file) =>
+        basename(file) === "obsidian.d.ts" &&
+        file.includes(`${join("node_modules", "obsidian")}/`),
+    );
   const directKind = (type) => {
-    const names = directTypeNames(type);
-    if (names.has("AdapterContext")) return "context";
-    if (names.has("ObsidianKnowledgeVaultAdapter")) return "adapter";
-    if ([...names].some((name) => rawNames.has(name))) return "raw";
+    if (declaredInPluginAdapter(type, "AdapterContext")) return "context";
+    if (declaredInPluginAdapter(type, "ObsidianKnowledgeVaultAdapter"))
+      return "adapter";
+    if (
+      [...rawNames].some(
+        (name) =>
+          declaredInPluginAdapter(type, name) || declaredInObsidian(type, name),
+      )
+    )
+      return "raw";
     if (type.isUnionOrIntersection()) {
       const kinds = new Set(type.types.map(directKind).filter(Boolean));
       if (kinds.size === 1) return [...kinds][0];
     }
     return undefined;
   };
-  const localSourceFiles = new Set(rootNames);
+  const inspectableDeclaration = (declaration) => {
+    const source = declaration.getSourceFile();
+    if (program.isSourceFileDefaultLibrary(source)) return false;
+    const file = resolve(source.fileName);
+    return (
+      !file.includes(`${join("node_modules")}/`) ||
+      file.includes(`${join("node_modules", "obsidian")}/`)
+    );
+  };
+  const builtInContainerNames = new Set([
+    "Array",
+    "Map",
+    "Object",
+    "Promise",
+    "ReadonlyArray",
+    "Set",
+    "String",
+    "WeakMap",
+    "WeakSet",
+  ]);
+  const twoArgumentMutationMethods = new Set([
+    "append",
+    "appendBinary",
+    "appendFile",
+    "copy",
+    "create",
+    "createBinary",
+    "modify",
+    "modifyBinary",
+    "process",
+    "rename",
+    "write",
+    "writeBinary",
+    "writeFile",
+  ]);
+  const minimumMutationArguments = new Map(
+    [...forbiddenVaultMutations].map((method) => [
+      method,
+      twoArgumentMutationMethods.has(method) ? 2 : 1,
+    ]),
+  );
+  const mutationDeclarationOwner = (declaration) => {
+    const owner = declaration.parent;
+    return (ts.isInterfaceDeclaration(owner) ||
+      ts.isClassDeclaration(owner) ||
+      ts.isTypeAliasDeclaration(owner)) &&
+      owner.name !== undefined
+      ? owner.name.text
+      : undefined;
+  };
+  const callableMutationMember = (type) =>
+    [...forbiddenVaultMutations].some((method) => {
+      const member = checker.getPropertyOfType(type, method);
+      if (
+        member === undefined ||
+        !member.declarations?.some(
+          (declaration) =>
+            inspectableDeclaration(declaration) &&
+            !builtInContainerNames.has(
+              mutationDeclarationOwner(declaration) ?? "",
+            ),
+        )
+      )
+        return false;
+      return member.declarations.some((declaration) => {
+        if (
+          !inspectableDeclaration(declaration) ||
+          builtInContainerNames.has(mutationDeclarationOwner(declaration) ?? "")
+        )
+          return false;
+        const memberType = checker.getTypeOfSymbolAtLocation(
+          member,
+          declaration,
+        );
+        return memberType.getCallSignatures().some((signature) => {
+          const signatureDeclaration = signature.getDeclaration();
+          return (
+            signatureDeclaration !== undefined &&
+            signatureDeclaration.parameters.filter(
+              (parameter) =>
+                parameter.questionToken === undefined &&
+                parameter.initializer === undefined &&
+                parameter.dotDotDotToken === undefined,
+            ).length >= (minimumMutationArguments.get(method) ?? 1)
+          );
+        });
+      });
+    });
   const typeHasAuthority = (type, depth = 0) => {
     const cached = authorityCache.get(type);
     if (cached !== undefined) return cached;
@@ -800,9 +911,7 @@ function scanWriterAuthorityTypes(records) {
     // is deliberately conservative for our local types while preventing
     // recursive standard-library and Obsidian declarations from exploding.
     authorityCache.set(type, false);
-    let result = [...directTypeNames(type)].some((name) =>
-      authorityNames.has(name),
-    );
+    let result = callableMutationMember(type);
     if (!result && type.isUnionOrIntersection())
       result = type.types.some((part) => typeHasAuthority(part, depth + 1));
     if (!result && (type.flags & ts.TypeFlags.TypeParameter) !== 0) {
@@ -811,11 +920,11 @@ function scanWriterAuthorityTypes(records) {
         constraint !== undefined && typeHasAuthority(constraint, depth + 1);
     }
     const symbol = type.aliasSymbol ?? type.getSymbol();
-    const localDeclaration = symbol?.declarations?.some((declaration) =>
-      localSourceFiles.has(resolve(declaration.getSourceFile().fileName)),
+    const resolvedDeclaration = symbol?.declarations?.some(
+      inspectableDeclaration,
     );
     const inspectStructure =
-      localDeclaration === true ||
+      resolvedDeclaration === true ||
       symbol === undefined ||
       (type.objectFlags & (ts.ObjectFlags.Anonymous | ts.ObjectFlags.Tuple)) !==
         0;
@@ -846,6 +955,7 @@ function scanWriterAuthorityTypes(records) {
             property.valueDeclaration ?? property.declarations?.[0];
           return (
             declaration !== undefined &&
+            property.declarations?.some(inspectableDeclaration) === true &&
             typeHasAuthority(
               checker.getTypeOfSymbolAtLocation(property, declaration),
               depth + 1,
@@ -857,6 +967,12 @@ function scanWriterAuthorityTypes(records) {
           ...type.getCallSignatures(),
           ...type.getConstructSignatures(),
         ]) {
+          const signatureDeclaration = signature.getDeclaration();
+          if (
+            signatureDeclaration !== undefined &&
+            !inspectableDeclaration(signatureDeclaration)
+          )
+            continue;
           if (typeHasAuthority(signature.getReturnType(), depth + 1)) {
             result = true;
             break;
