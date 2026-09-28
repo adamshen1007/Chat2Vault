@@ -147,21 +147,42 @@ Derived from [[Sources/Synthetic \\[Source\\]]].
     );
   });
 
-  it("uses an exact Obsidian-compatible Markdown link when a source path contains #", () => {
-    const rendered = renderKnowledgeNote(reviewedCandidate(), [
-      resolvedSource({ sourceNotePath: "Sources#Archive/Roadmap#Q4.md" }),
-    ]);
+  it.each([
+    "Sources#Archive/Foo.md",
+    "Sources/Foo#Archive.md",
+    "Sources#Archive/Foo).md",
+    "Sources/Foo)#Q4 (draft).md",
+  ])(
+    "refuses a source path without exact property and body backlinks: %s",
+    (sourceNotePath) => {
+      expect(
+        renderKnowledgeNote(reviewedCandidate(), [
+          resolvedSource({ sourceNotePath }),
+        ]),
+      ).toEqual({
+        ok: false,
+        diagnostics: [
+          {
+            code: "KNOWLEDGE_SOURCE_UNRESOLVED",
+            severity: "error",
+            message: "A knowledge source could not be resolved.",
+          },
+        ],
+      });
+    },
+  );
 
+  it("keeps punctuation without # in quoted wikilink metadata and body", () => {
+    const rendered = renderKnowledgeNote(reviewedCandidate(), [
+      resolvedSource({ sourceNotePath: "Sources/Foo) (draft)!.md" }),
+    ]);
     expect(rendered.ok).toBe(true);
     if (!rendered.ok) return;
     expect(rendered.noteContent).toContain(
-      'source_conversation: "[Sources#Archive/Roadmap#Q4](Sources%23Archive/Roadmap%23Q4.md)"',
+      'source_conversation: "[[Sources/Foo) (draft)!]]"',
     );
     expect(rendered.noteContent).toContain(
-      "Derived from [Sources#Archive/Roadmap#Q4](Sources%23Archive/Roadmap%23Q4.md).",
-    );
-    expect(rendered.noteContent).not.toContain(
-      "[[Sources#Archive/Roadmap#Q4]]",
+      "Derived from [[Sources/Foo) (draft)!]].",
     );
   });
 

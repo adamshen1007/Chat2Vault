@@ -725,7 +725,7 @@ describe("preview view", () => {
     await view.onClose();
   });
 
-  it("renders and writes exact Markdown provenance for a source path containing #", async () => {
+  it("keeps dry-run and write closed for a source path containing #", async () => {
     const { view, created } = await openKnowledgeView({
       sourceRoot: "Sources#Archive",
       sourcePath: "Sources#Archive/Roadmap#Q4.md",
@@ -743,21 +743,13 @@ describe("preview view", () => {
     button("Dry run")?.click();
     await flush();
 
-    const preview = view.contentEl.querySelector(
-      ".c2v-knowledge-plan pre > code",
-    )?.textContent;
-    expect(preview).toContain(
-      "[Sources#Archive/Roadmap#Q4](Sources%23Archive/Roadmap%23Q4.md)",
+    expect(view.contentEl.textContent).toContain(
+      "A knowledge source could not be resolved.",
     );
+    expect(button("Write")?.disabled).toBe(true);
     button("Write")?.click();
     await flush();
-    const written = [...created.values()].map((bytes) =>
-      new TextDecoder().decode(bytes),
-    );
-    expect(written).toHaveLength(1);
-    expect(written[0]).toContain(
-      "[Sources#Archive/Roadmap#Q4](Sources%23Archive/Roadmap%23Q4.md)",
-    );
+    expect(created.size).toBe(0);
     await view.onClose();
   });
 

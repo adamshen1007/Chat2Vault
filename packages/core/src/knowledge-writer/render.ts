@@ -345,21 +345,6 @@ function wikilink(path: string): string {
   return `[[${escaped}]]`;
 }
 
-function sourceLink(path: string): string {
-  if (!path.includes("#")) return wikilink(path);
-  const withoutExtension = path.slice(0, -3);
-  const label = [...withoutExtension]
-    .map((point) =>
-      point === "\\" || point === "[" || point === "]" ? `\\${point}` : point,
-    )
-    .join("");
-  const destination = path
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-  return `[${label}](${destination})`;
-}
-
 export function safeKnowledgeFilename(
   title: string,
   candidateFingerprint: string,
@@ -421,6 +406,14 @@ export function renderKnowledgeNote(
       ok: false,
       diagnostics: [m06Diagnostic("KNOWLEDGE_SOURCE_STALE")],
     };
+  // Obsidian treats # in wikilinks as a subpath and does not render Markdown
+  // links in properties. Without an exact property and body backlink, no note
+  // may be planned for this otherwise valid source path.
+  if (ordered.some(({ sourceNotePath }) => sourceNotePath.includes("#")))
+    return {
+      ok: false,
+      diagnostics: [m06Diagnostic("KNOWLEDGE_SOURCE_UNRESOLVED")],
+    };
 
   const candidateFingerprint = fingerprint({
     schemaVersion: 1,
@@ -431,7 +424,7 @@ export function renderKnowledgeNote(
     tags: data.tags,
     sourceRefs: data.sourceRefs,
   });
-  const links = ordered.map(({ sourceNotePath }) => sourceLink(sourceNotePath));
+  const links = ordered.map(({ sourceNotePath }) => wikilink(sourceNotePath));
   const providers = ordered.map(({ provider }) => provider);
   const sourceFingerprints = ordered.map(
     ({ conversationFingerprint }) => conversationFingerprint,

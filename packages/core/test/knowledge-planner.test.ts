@@ -217,6 +217,28 @@ describe("M06 knowledge planner", () => {
     ).toContain("KNOWLEDGE_SOURCE_STALE");
   });
 
+  it.each([
+    ["Sources#Archive", "Sources#Archive/Foo.md"],
+    ["Sources", "Sources/Foo#Archive.md"],
+    ["Sources#Archive", "Sources#Archive/Foo)#Q4.md"],
+  ])(
+    "blocks an unrenderable trusted source before planning a create: %s/%s",
+    (sourceRoot, sourceNotePath) => {
+      const source = first(validInput().resolvedSources);
+      const plan = planKnowledgeWrite(
+        validInput({
+          sourceRoot,
+          resolvedSources: [{ ...source, sourceNotePath }],
+        }),
+      );
+      expect(plan.status).toBe("blocked");
+      expect(plan.entries).toEqual([]);
+      expect(plan.diagnostics).toContainEqual(
+        m06Diagnostic("KNOWLEDGE_SOURCE_UNRESOLVED"),
+      );
+    },
+  );
+
   it("resolves an exact source among same-provider sources without conversation IDs", () => {
     const exactConversationFingerprint = `sha256:${"5".repeat(64)}`;
     const otherConversationFingerprint = `sha256:${"6".repeat(64)}`;
