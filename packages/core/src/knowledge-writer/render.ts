@@ -29,6 +29,9 @@ import type {
 import { m06Diagnostic } from "./review.js";
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/u;
+// The other documented invalid link characters, | and :, are already rejected
+// by the M03 source-path validator used by canonicalSource.
+const OBSIDIAN_RESERVED_LINK = /#|\^|%%|\[\[|\]\]/u;
 // eslint-disable-next-line no-control-regex -- portable filenames forbid these exact controls.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/gu;
 const WINDOWS_INVALID = /[<>:"/\\|?*]/gu;
@@ -345,6 +348,10 @@ function wikilink(path: string): string {
   return `[[${escaped}]]`;
 }
 
+function hasObsidianReservedLinkSyntax(path: string): boolean {
+  return OBSIDIAN_RESERVED_LINK.test(path);
+}
+
 export function safeKnowledgeFilename(
   title: string,
   candidateFingerprint: string,
@@ -406,10 +413,13 @@ export function renderKnowledgeNote(
       ok: false,
       diagnostics: [m06Diagnostic("KNOWLEDGE_SOURCE_STALE")],
     };
-  // Obsidian treats # in wikilinks as a subpath and does not render Markdown
-  // links in properties. Without an exact property and body backlink, no note
-  // may be planned for this otherwise valid source path.
-  if (ordered.some(({ sourceNotePath }) => sourceNotePath.includes("#")))
+  // Properties require quoted wikilinks; documented reserved link syntax
+  // cannot guarantee the same exact source in both metadata and body.
+  if (
+    ordered.some(({ sourceNotePath }) =>
+      hasObsidianReservedLinkSyntax(sourceNotePath),
+    )
+  )
     return {
       ok: false,
       diagnostics: [m06Diagnostic("KNOWLEDGE_SOURCE_UNRESOLVED")],

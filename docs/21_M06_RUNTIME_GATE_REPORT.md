@@ -2,9 +2,9 @@
 
 Version: 1.0 exact-candidate final gate
 
-Date: 2026-09-26
+Date: 2026-09-28
 
-Decision: **CONDITIONAL GO — current backlink remediation is green in targeted, full aggregate, boundary, build, and official M06 runtime verification; independent R2 exact-candidate review remains**
+Decision: **CONDITIONAL GO — current reserved-link remediation is green in targeted, full aggregate, boundary, build, and official M06 runtime verification; independent R2 exact-candidate review remains**
 
 ## Qualified candidate
 
@@ -28,9 +28,9 @@ This report records the remediated M06 capability boundary, two-row macOS x86_64
 - Host: macOS 15.7.9 (build 24G830), x86_64
 - Development runtime: Node.js 24.16.0; pnpm 11.7.0
 - Candidate input SHA-256: `bb95c304414b47a74ddd8f553484cf8723848b357283e62fc5d3982c82ec0c5c`
-- Qualified production `main.js` SHA-256: `7921c29b3350a124e6ad4e087ac94c268eaa3297726d60fbba4a09a247ce3245`
-- Qualified worker SHA-256: `11916b26e7c0e74f308a87b3ad1ae59ef54070ff6e6f1203fb92000064d5abfc`
-- Qualified runtime-only bundle SHA-256: `9bc203ff963209590a04dc7d51551e398ee59a22b53305a759ef2dd51b344cf0`
+- Qualified production `main.js` SHA-256: `5c4f3abfe289e11595b41510c86680bad1e08378b895357fbc1c2628e69e29d4`
+- Qualified worker SHA-256: `4559276ee99b3792195c3cbeb98d0d48d3bb21fab30dacd0381b6b1166facb20`
+- Qualified runtime-only bundle SHA-256: `39c46539c3459b236c3b89fc7f50105be9eb7b4c56cf18ae5e89ee8bbd5f0cbc`
 
 Both rows used identical candidate, production bundle, worker, manifest, styles, and native artifacts. The generated `main.js` and `worker.js` were rebuilt from the final sources, matched the qualified identities above, and are retained for the authorized final Task 7 commit.
 
@@ -88,8 +88,8 @@ The stable row resolves official metadata at execution time, validates its GitHu
 
 | Row     | Exact host identity                                                                 | Scenarios | Closed results                                                                             | Source SHA-256 before/after                                        | Canonical packet preimage                                                                                                                   | Result |
 | ------- | ----------------------------------------------------------------------------------- | --------: | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Minimum | Obsidian 1.7.4; Electron 31.6.0; Chromium 126.0.6478.234; Node 20.17.0; darwin x64  |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; post-fixture source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-minimum.json`](evidence/m06-runtime-minimum.json), SHA-256 `e6931279d6ef8a10aeddf29e137a8c5825e507a3b08d650c5bde2a18a782a535` | PASS   |
-| Stable  | Obsidian 1.13.7; Electron 39.8.3; Chromium 142.0.7444.265; Node 22.22.1; darwin x64 |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; post-fixture source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-stable.json`](evidence/m06-runtime-stable.json), SHA-256 `1b99a84b88707c53185a0022d41d3558c0ff1202c393643be89c70baf7ad3c61`   | PASS   |
+| Minimum | Obsidian 1.7.4; Electron 31.6.0; Chromium 126.0.6478.234; Node 20.17.0; darwin x64  |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; post-fixture source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-minimum.json`](evidence/m06-runtime-minimum.json), SHA-256 `1f66db3f1d76f74b4857bb1a16581047c563b1c6ea089f91a25c3007c1f7fc4c` | PASS   |
+| Stable  | Obsidian 1.13.7; Electron 39.8.3; Chromium 142.0.7444.265; Node 22.22.1; darwin x64 |       9/9 | 2 created; 2 identical no-op; 1 conflict; provider delta 0; post-fixture source attempts 0 | `0d5e6873fd5a56b574cf7143f4ea2de7c5dfbd9b6188c4161ae3538fa9a7782c` | [`m06-runtime-stable.json`](evidence/m06-runtime-stable.json), SHA-256 `d9d63d6c8c77107d2a5593fe2bedc7dbf51bde1eee33fb7cd74f5e762cf8a086`   | PASS   |
 
 The canonical JSON files are the exact sanitized packet preimages. Running `shasum -a 256` on each file reproduces the table values. They contain no trailing bytes outside the canonical JSON.
 
@@ -121,13 +121,13 @@ The retained knowledge evidence is identical in both rows:
 
 | Artifact                       |   Bytes | SHA-256                                                            |
 | ------------------------------ | ------: | ------------------------------------------------------------------ |
-| qualified `main.js`            | 236,948 | `7921c29b3350a124e6ad4e087ac94c268eaa3297726d60fbba4a09a247ce3245` |
-| qualified `worker.js`          |  19,397 | `11916b26e7c0e74f308a87b3ad1ae59ef54070ff6e6f1203fb92000064d5abfc` |
+| qualified `main.js`            | 236,995 | `5c4f3abfe289e11595b41510c86680bad1e08378b895357fbc1c2628e69e29d4` |
+| qualified `worker.js`          |  19,397 | `4559276ee99b3792195c3cbeb98d0d48d3bb21fab30dacd0381b6b1166facb20` |
 | `manifest.json`                |     251 | `e5fb0e963c510919e4206bbb5d873d75813f1e3d40bbe6e41a2d8fb5a242dfd9` |
 | `styles.css`                   |   6,911 | `f89ce612b62c0f0dffdf9c0884e246a26791634e49c8eb94b2e8c188426afce3` |
 | `native/source_observer.node`  |  41,352 | `ce334cb2dae22bb803bb0b9e5ef0b44b2359795e53b19c4852e837bfb04418f5` |
 | `native/keychain.node`         |  66,376 | `3751f72aa872aa3baae527d3242df2f1750f8c6e13fc91b4ca1b6aad70459c1a` |
-| runtime-only `runtime-test.js` | 279,237 | `9bc203ff963209590a04dc7d51551e398ee59a22b53305a759ef2dd51b344cf0` |
+| runtime-only `runtime-test.js` | 279,284 | `39c46539c3459b236c3b89fc7f50105be9eb7b4c56cf18ae5e89ee8bbd5f0cbc` |
 
 ## Verification ledger
 
@@ -160,11 +160,15 @@ The retained knowledge evidence is identical in both rows:
 | Task 8 targeted core suite                                                                                                     | PASS: 3 files, 42 tests                                                                                                                                          |
 | Task 8 targeted plugin suite                                                                                                   | PASS: 4 files, 170 tests, including M06 boundary 95/95                                                                                                           |
 | `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000 pnpm verify` (two fresh final-remediation attempts)                                        | BLOCKED: format, lint, strict typecheck, core 305/305, plugin 751/751, and build passed; first attempt failed closed at stable focus and second at minimum focus |
-| Current `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000 pnpm verify` (backlink remediation)                                                | PASS: format, lint, strict typecheck, core 312/312, plugin 751/751, build, both M05 host rows, M06 boundary/artifact gates                                       |
-| Current `pnpm check:m06`                                                                                                       | PASS: AST boundary and 95/95 tests                                                                                                                               |
-| Current official M06 minimum and stable runtime rows                                                                           | PASS: each 9/9 scenarios; canonical packet hashes in the runtime matrix above                                                                                    |
+| Earlier `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000 pnpm verify` (`#`-only remediation)                                                | PASS: format, lint, strict typecheck, core 312/312, plugin 751/751, build, both M05 host rows, M06 boundary/artifact gates                                       |
+| Earlier `pnpm check:m06` (`#`-only remediation)                                                                                | PASS: AST boundary and 95/95 tests                                                                                                                               |
+| Earlier official M06 minimum and stable runtime rows (`#`-only remediation)                                                    | PASS: each 9/9 scenarios; superseded by the current runtime matrix above                                                                                         |
+| Reserved-link follow-up targeted RED/GREEN                                                                                     | RED: 18 failing core cases; GREEN: core render/planner 48/48, plugin view 39/39                                                                                  |
+| Reserved-link follow-up `pnpm check:m06`                                                                                       | PASS on retry: syntax-aware boundary and 95/95 tests; first attempt had two host-contention timeouts                                                             |
+| Reserved-link follow-up official M06 minimum and stable rows                                                                   | PASS: 9/9 each on the new bundle; canonical packet hashes in the runtime matrix above                                                                            |
+| Reserved-link follow-up `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000 pnpm verify`                                                       | PASS: format, lint, strict typecheck, core 330/330, plugin 760/760, build, M05 minimum/stable rows, M06 boundary/artifact gate                                   |
 
-The current backlink remediation rebuilt the production artifacts and passed both official M06 rows independently: minimum Obsidian 1.7.4 and current stable Obsidian 1.13.7 each reached `complete` with 9/9 scenarios. The exact M06 boundary gate passed 95/95, and the retained production `main.js` SHA-256 is `7921c29b3350a124e6ad4e087ac94c268eaa3297726d60fbba4a09a247ce3245` with runtime-only bundle SHA-256 `9bc203ff963209590a04dc7d51551e398ee59a22b53305a759ef2dd51b344cf0`. The exact `C2V_M05_MANUAL_FOCUS_WAIT_MS=60000 pnpm verify` exited 0: formatting, lint, strict typecheck, core 312/312, plugin 751/751, build, M05 minimum and stable host rows, and M06 boundary/artifact gates passed.
+The earlier `#`-only backlink remediation passed its own exact aggregate. The current reserved-link remediation rebuilt the production artifacts and passed both official M06 rows independently: minimum Obsidian 1.7.4 and current stable Obsidian 1.13.7 each reached `complete` with 9/9 scenarios. The exact M06 boundary gate passed 95/95 on retry after two host-contention timeouts in the first attempt. The retained production `main.js` SHA-256 is `5c4f3abfe289e11595b41510c86680bad1e08378b895357fbc1c2628e69e29d4` with runtime-only bundle SHA-256 `39c46539c3459b236c3b89fc7f50105be9eb7b4c56cf18ae5e89ee8bbd5f0cbc`. The current exact aggregate passed formatting, lint, strict typecheck, core 330/330, plugin 760/760, build, both M05 host rows, and the M06 boundary/artifact gates.
 
 Historical prior-remediation attempts failed closed at the macOS focus assertion: the first at stable after minimum completed, the second at minimum. A separate `check:plugin` retry using PID-targeted System Events activation also failed the independent minimum `BrowserWindow`/`webContents` assertion. Those earlier attempts did not qualify their candidates; the current exact aggregate completed both rows without weakening the focus predicate.
 
@@ -194,6 +198,7 @@ Historical prior-remediation attempts failed closed at the macOS focus assertion
 22. Final R2 review found that a fresh candidate could be installed during a pending source-root save and then previewed or written under the previous settled root because M06 authority carried only the knowledge-root generation/pending state. Controller authority now carries the source-save generation plus both root pending states; candidate installation, preview, and Write fail closed while either save is pending, and stale plans are fenced across source-save start and either settlement outcome. RED/GREEN controller and UI tests cover pending installation, success/failure settlement, and stale-plan execution.
 23. Final R2 review found that valid source roots or filenames containing `#` produced a wikilink that Obsidian interpreted as a heading subpath. A first remediation used a percent-encoded Markdown link for `#` paths, but a further independent finding showed that Markdown is not supported in Obsidian properties and the source metadata was misleading. Obsidian's published link/property contracts require a quoted wikilink in `source_conversation`; the link parser treats `#` as a subpath delimiter, so M06 now fails closed with `KNOWLEDGE_SOURCE_UNRESOLVED` before note creation for a `#` source path. Core RED/GREEN render and planner tests cover `#` in root/name, `)`, and punctuation combinations; view integration checks disabled Write and zero creation. Ordinary paths still render matching quoted property and body wikilinks.
 24. Fresh aggregate verification for the final R2 remediation passed formatting, lint, strict typecheck, core 305/305, plugin 751/751, and build twice, but macOS did not deliver a foreground focus event inside the bounded M05 operator window. A direct PID-targeted System Events activation also failed the host's independent focus assertion. The gate remained fail-closed; the separately executed official M06 minimum and stable rows both passed 9/9 and regenerated the canonical packets.
+25. A fresh independent R2 review found that `#` was only one member of Obsidian's documented problematic link syntax. M03 source paths also permit `^`, `%%`, `[[`, and `]]`; `|` and `:` are already invalid under M03 source-path normalization. One M06 predicate now rejects all reachable documented reserved tokens before rendering any note. RED/GREEN render, mixed-source planner, and plugin UI tests cover roots and filenames, disabled Write, and zero creation. Single `%`, single bracket escaping, and ordinary punctuation remain accepted. The limitation is intentional until actual Obsidian resolution evidence supports an exact quoted property and body backlink for any reserved token.
 
 No macOS TCC prompt remained. A visible operator click was required only to satisfy the strict focus assertion during the bounded qualification window.
 

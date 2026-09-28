@@ -152,6 +152,14 @@ Derived from [[Sources/Synthetic \\[Source\\]]].
     "Sources/Foo#Archive.md",
     "Sources#Archive/Foo).md",
     "Sources/Foo)#Q4 (draft).md",
+    "Sources^Archive/Foo.md",
+    "Sources/Foo^Archive.md",
+    "Sources%%Archive/Foo.md",
+    "Sources/Foo%%Archive.md",
+    "Sources[[Archive/Foo.md",
+    "Sources/Foo[[Archive.md",
+    "Sources]]Archive/Foo.md",
+    "Sources/Foo]]Archive.md",
   ])(
     "refuses a source path without exact property and body backlinks: %s",
     (sourceNotePath) => {
@@ -172,6 +180,26 @@ Derived from [[Sources/Synthetic \\[Source\\]]].
     },
   );
 
+  it("rejects a mixed-source note if either trusted backlink is reserved", () => {
+    const other = {
+      provider: "unknown" as const,
+      conversationFingerprint: `sha256:${"6".repeat(64)}`,
+      messageFingerprints: [`sha256:${"7".repeat(64)}`],
+    };
+    const mixed = reviewedCandidate({
+      sourceRefs: [...reviewedCandidate().sourceRefs, other],
+    });
+    expect(
+      renderKnowledgeNote(mixed, [
+        resolvedSource(),
+        { ...other, sourceNotePath: "Sources/Other%%Note.md" },
+      ]),
+    ).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: "KNOWLEDGE_SOURCE_UNRESOLVED" }],
+    });
+  });
+
   it("keeps punctuation without # in quoted wikilink metadata and body", () => {
     const rendered = renderKnowledgeNote(reviewedCandidate(), [
       resolvedSource({ sourceNotePath: "Sources/Foo) (draft)!.md" }),
@@ -183,6 +211,17 @@ Derived from [[Sources/Synthetic \\[Source\\]]].
     );
     expect(rendered.noteContent).toContain(
       "Derived from [[Sources/Foo) (draft)!]].",
+    );
+    const singlePercent = renderKnowledgeNote(reviewedCandidate(), [
+      resolvedSource({ sourceNotePath: "Sources/50% [Draft].md" }),
+    ]);
+    expect(singlePercent.ok).toBe(true);
+    if (!singlePercent.ok) return;
+    expect(singlePercent.noteContent).toContain(
+      'source_conversation: "[[Sources/50% \\\\[Draft\\\\]]]"',
+    );
+    expect(singlePercent.noteContent).toContain(
+      "Derived from [[Sources/50% \\[Draft\\]]].",
     );
   });
 
@@ -227,6 +266,16 @@ Derived from [[Sources/Synthetic \\[Source\\]]].
         resolvedSource({ conversationFingerprint: `sha256:${"f".repeat(64)}` }),
       ]),
     ).toMatchObject({ ok: false });
+    for (const sourceNotePath of [
+      "Sources|Archive/Foo.md",
+      "Sources/Foo:Archive.md",
+    ]) {
+      expect(
+        renderKnowledgeNote(reviewedCandidate(), [
+          resolvedSource({ sourceNotePath }),
+        ]),
+      ).toMatchObject({ ok: false });
+    }
   });
 
   it("refuses proposed/rejected reviews and malformed immutable authority", () => {

@@ -725,33 +725,47 @@ describe("preview view", () => {
     await view.onClose();
   });
 
-  it("keeps dry-run and write closed for a source path containing #", async () => {
-    const { view, created } = await openKnowledgeView({
-      sourceRoot: "Sources#Archive",
-      sourcePath: "Sources#Archive/Roadmap#Q4.md",
-    });
-    const button = (label: string): HTMLButtonElement | undefined =>
-      Array.from(
-        view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
-      ).find((candidate) => candidate.textContent === label);
-    button("Accept")?.click();
-    view.contentEl
-      .querySelector<HTMLInputElement>(
-        '[aria-label^="Select knowledge candidate"]',
-      )
-      ?.click();
-    button("Dry run")?.click();
-    await flush();
+  it.each([
+    ["Sources#Archive", "Sources#Archive/Foo.md"],
+    ["Sources", "Sources/Foo#Archive.md"],
+    ["Sources^Archive", "Sources^Archive/Foo.md"],
+    ["Sources", "Sources/Foo^Archive.md"],
+    ["Sources%%Archive", "Sources%%Archive/Foo.md"],
+    ["Sources", "Sources/Foo%%Archive.md"],
+    ["Sources[[Archive", "Sources[[Archive/Foo.md"],
+    ["Sources", "Sources/Foo[[Archive.md"],
+    ["Sources]]Archive", "Sources]]Archive/Foo.md"],
+    ["Sources", "Sources/Foo]]Archive.md"],
+  ])(
+    "keeps dry-run and write closed for reserved source link %s/%s",
+    async (sourceRoot, sourcePath) => {
+      const { view, created } = await openKnowledgeView({
+        sourceRoot,
+        sourcePath,
+      });
+      const button = (label: string): HTMLButtonElement | undefined =>
+        Array.from(
+          view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+        ).find((candidate) => candidate.textContent === label);
+      button("Accept")?.click();
+      view.contentEl
+        .querySelector<HTMLInputElement>(
+          '[aria-label^="Select knowledge candidate"]',
+        )
+        ?.click();
+      button("Dry run")?.click();
+      await flush();
 
-    expect(view.contentEl.textContent).toContain(
-      "A knowledge source could not be resolved.",
-    );
-    expect(button("Write")?.disabled).toBe(true);
-    button("Write")?.click();
-    await flush();
-    expect(created.size).toBe(0);
-    await view.onClose();
-  });
+      expect(view.contentEl.textContent).toContain(
+        "A knowledge source could not be resolved.",
+      );
+      expect(button("Write")?.disabled).toBe(true);
+      button("Write")?.click();
+      await flush();
+      expect(created.size).toBe(0);
+      await view.onClose();
+    },
+  );
 
   it("blocks conflicts, writes only a current ready plan, and renders the complete content-free ledger", async () => {
     const conflict = await openKnowledgeView({ observation: "conflict" });

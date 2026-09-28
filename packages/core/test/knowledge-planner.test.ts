@@ -221,6 +221,14 @@ describe("M06 knowledge planner", () => {
     ["Sources#Archive", "Sources#Archive/Foo.md"],
     ["Sources", "Sources/Foo#Archive.md"],
     ["Sources#Archive", "Sources#Archive/Foo)#Q4.md"],
+    ["Sources^Archive", "Sources^Archive/Foo.md"],
+    ["Sources", "Sources/Foo^Archive.md"],
+    ["Sources%%Archive", "Sources%%Archive/Foo.md"],
+    ["Sources", "Sources/Foo%%Archive.md"],
+    ["Sources[[Archive", "Sources[[Archive/Foo.md"],
+    ["Sources", "Sources/Foo[[Archive.md"],
+    ["Sources]]Archive", "Sources]]Archive/Foo.md"],
+    ["Sources", "Sources/Foo]]Archive.md"],
   ])(
     "blocks an unrenderable trusted source before planning a create: %s/%s",
     (sourceRoot, sourceNotePath) => {
@@ -238,6 +246,31 @@ describe("M06 knowledge planner", () => {
       );
     },
   );
+
+  it("keeps a mixed-source selection blocked without any creatable entry", () => {
+    const original = candidate();
+    const second = {
+      provider: "unknown" as const,
+      conversationFingerprint: `sha256:${"6".repeat(64)}`,
+      messageFingerprints: [`sha256:${"7".repeat(64)}`],
+    };
+    const plan = planKnowledgeWrite(
+      validInput({
+        candidates: [
+          candidate({ sourceRefs: [...original.sourceRefs, second] }),
+        ],
+        resolvedSources: [
+          ...validInput().resolvedSources,
+          { ...second, sourceNotePath: "Sources/Other^Note.md" },
+        ],
+      }),
+    );
+    expect(plan.status).toBe("blocked");
+    expect(plan.entries).toEqual([]);
+    expect(plan.diagnostics).toContainEqual(
+      m06Diagnostic("KNOWLEDGE_SOURCE_UNRESOLVED"),
+    );
+  });
 
   it("resolves an exact source among same-provider sources without conversation IDs", () => {
     const exactConversationFingerprint = `sha256:${"5".repeat(64)}`;
