@@ -161,6 +161,18 @@ describe("M05 capability boundary", () => {
     expect(runtime).toContain("this.addSettingTab(this.runtimeSettingTab)");
   });
 
+  it("keeps the optional manual focus assist bounded and fail-closed", () => {
+    const runner = readFileSync(
+      join(pluginRoot, "scripts/check-m05-runtime.mjs"),
+      "utf8",
+    );
+    expect(runner).toContain("C2V_M05_MANUAL_FOCUS_WAIT_MS");
+    expect(runner).toContain("manualFocusWaitMs > 60_000");
+    expect(runner).toContain("window.isFocused()");
+    expect(runner).toContain("contents.isFocused()");
+    expect(runner).toContain("Chat2Vault focus assertion failed");
+  });
+
   it("pins DNS to loopback while allowing only the supplied host-local mismatch destination", async () => {
     const mismatchAddress = "192.0.2.44";
     const dependencies = createRuntimeNetworkDependencies({
@@ -256,9 +268,21 @@ describe("M05 capability boundary", () => {
     expect(runner).not.toContain("Trust author and enable plugins");
     expect(runner).not.toContain("view?.draw?.(view.controller.snapshot)");
     expect(runner).toContain(
-      "Prepare manual prompt|Copy prompt|Paste strict JSON|Distill with provider|Candidates per page",
+      "Prepare manual prompt|Copy prompt|Paste strict JSON|Distill with provider|Accept|Edit|Reject|0 diagnostics",
     );
-    expect(runner).toContain('candidateReverse === "Distill with provider"');
+    expect(runner).toContain('candidateReverse === "Reject"');
+    expect(runner).toContain(
+      "const legacyPreview=document.querySelector('.c2v-candidate-preview')",
+    );
+    expect(runner).toContain(
+      "const legacyPagination=document.querySelector('[aria-label=\"Candidates per page\"]')",
+    );
+    expect(runner).toContain(
+      "!review||legacyPreview||legacyPagination||candidates?.length!==1",
+    );
+    expect(runner).toContain("sourceActions.length!==0");
+    expect(runner).toContain('diagnostics?.textContent!=="0 diagnostics"');
+    expect(runner).toContain('"candidate-review-replacement"');
     expect(runner).toContain('server.on("connection"');
     expect(runner).toContain('mismatchServer.on("connection"');
     expect(runner).not.toContain('.on("secureConnection"');

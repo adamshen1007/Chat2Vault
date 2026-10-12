@@ -13,7 +13,8 @@ import type {
 } from "./keychain.js";
 import {
   DEFAULT_SETTINGS,
-  type Chat2VaultSettingsV3,
+  type Chat2VaultSettingsV3 as PersistedSettingsV3,
+  type Chat2VaultSettingsV4,
   type IdentityState,
   type ProviderInitializationResult,
   type ProviderSettings,
@@ -21,7 +22,9 @@ import {
   type SettingsSaveResult,
 } from "./settings-model.js";
 
-export { DEFAULT_SETTINGS, type Chat2VaultSettingsV3, type ProviderSettings };
+export { DEFAULT_SETTINGS, type Chat2VaultSettingsV4, type ProviderSettings };
+// Transitional name retained until Task 6 updates the main-plugin import.
+export type Chat2VaultSettingsV3 = Chat2VaultSettingsV4;
 
 const CLOUD_DISCLOSURE =
   "Cloud distillation sends the complete selected conversation to the configured provider endpoint. The provider may retain, process, or bill for this data under its own terms. Chat2Vault does not verify the provider's identity, privacy policy, prices, or model behavior.";
@@ -34,7 +37,7 @@ type ProviderCode =
   keyof typeof M05_DIAGNOSTICS | "UNSUPPORTED_SETTINGS_SCHEMA";
 
 interface SettingsOwner extends Plugin {
-  settings: Chat2VaultSettingsV3;
+  settings: PersistedSettingsV3 | Chat2VaultSettingsV4;
   identityState: IdentityState | "saving" | "failed";
   credentialState: CredentialState;
   providerSettingsStatusCode:
@@ -44,6 +47,7 @@ interface SettingsOwner extends Plugin {
     value: unknown,
   ): Promise<SettingsSaveResult | undefined>;
   saveSourceRoot(value: unknown): Promise<SettingsSaveResult | undefined>;
+  saveKnowledgeRoot?(value: unknown): Promise<SettingsSaveResult | undefined>;
   setProviderDraft(draft: ProviderSettings): void;
   saveProviderSettings(): Promise<ProviderSettingsSaveResult | undefined>;
   retryProviderInitialization(): Promise<
@@ -186,6 +190,35 @@ export class Chat2VaultSettingTab extends PluginSettingTab {
             text.setDisabled(true);
             try {
               showResult(sourceStatus, await this.owner.saveSourceRoot(value));
+            } finally {
+              text.setDisabled(false);
+            }
+          });
+      });
+    const knowledgeStatus = this.containerEl.createEl("p");
+    this.containerEl.createEl("p", {
+      text: "Accepted knowledge notes are created only after an exact dry-run and an explicit Write action.",
+    });
+    new Setting(this.containerEl)
+      .setName("Knowledge folder")
+      .setDesc("Vault-relative folder used for create-only knowledge notes.")
+      .addText((text) => {
+        text
+          .setValue(
+            "knowledgeRoot" in this.owner.settings
+              ? this.owner.settings.knowledgeRoot
+              : "",
+          )
+          .setPlaceholder("Knowledge")
+          .setDisabled(this.owner.saveKnowledgeRoot === undefined)
+          .onChange(async (value) => {
+            if (this.owner.saveKnowledgeRoot === undefined) return;
+            text.setDisabled(true);
+            try {
+              showResult(
+                knowledgeStatus,
+                await this.owner.saveKnowledgeRoot(value),
+              );
             } finally {
               text.setDisabled(false);
             }

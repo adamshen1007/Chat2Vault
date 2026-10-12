@@ -94,7 +94,9 @@ if (writeMatches.length !== 1)
 if (/clipboard\.(?:readText|read|write)(?!Text\(text\))/u.test(main))
   failures.push("main.ts: automatic or non-contract clipboard access");
 const manualStart = view.indexOf("private drawManualDistillation");
-const manualEnd = view.indexOf("private async previewSource", manualStart);
+const manualEnd = view.indexOf("private drawKnowledgeReview", manualStart);
+if (manualStart < 0 || manualEnd <= manualStart)
+  failures.push("view.ts manual distillation region is ambiguous");
 const manualView = view.slice(manualStart, manualEnd);
 for (const token of [
   "innerHTML",

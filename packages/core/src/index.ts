@@ -141,3 +141,35 @@ export type {
   SourceNoteRenderInput,
   SourceNoteRenderResult,
 } from "./source-writer/primitives.js";
+export type {
+  BlockedKnowledgeWritePlan,
+  KnowledgeDecision,
+  KnowledgeNoteRenderResult,
+  KnowledgePlanEntry,
+  KnowledgePlannerInput,
+  KnowledgeReviewEdit,
+  KnowledgeReviewEditResult,
+  KnowledgeTargetObservation,
+  KnowledgeTargetState,
+  KnowledgeWritePlan,
+  M06Diagnostic,
+  M06DiagnosticCode,
+  ReadyKnowledgeWritePlan,
+  ResolvedKnowledgeSource,
+  ReviewedKnowledgeCandidate,
+} from "./knowledge-writer/contracts.js";
+export {
+  createKnowledgeReview,
+  editKnowledgeCandidate,
+  m06Diagnostic,
+  setKnowledgeDecision,
+  setKnowledgeSelected,
+} from "./knowledge-writer/review.js";
+export {
+  renderKnowledgeNote,
+  safeKnowledgeFilename,
+} from "./knowledge-writer/render.js";
+export {
+  knowledgeWritePlanEqual,
+  planKnowledgeWrite,
+} from "./knowledge-writer/planner.js";

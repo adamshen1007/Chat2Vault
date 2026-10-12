@@ -7,3 +7,6 @@ fixtures/chatgpt/malformed.json
 docs/M02_SPEC.md
 apps/obsidian-plugin/main.js
 apps/obsidian-plugin/worker.js
+.superpowers/sdd
+docs/evidence/m06-runtime-minimum.json
+docs/evidence/m06-runtime-stable.json

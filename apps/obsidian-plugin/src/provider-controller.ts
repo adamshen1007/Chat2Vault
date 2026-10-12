@@ -94,6 +94,7 @@ export interface ProviderCurrent {
 
 export interface ProviderControllerServices {
   current(): ProviderCurrent;
+  onCandidatesChanged?(candidates: readonly PreviewCandidate[]): void;
   readCredential(operationCurrent: () => boolean): CredentialReadResult;
   buildRequest?(input: {
     model: string;
@@ -320,6 +321,14 @@ export class ProviderController {
 
   public get snapshot(): ProviderSnapshot {
     return this.currentSnapshot;
+  }
+
+  private candidatesChanged(candidates: readonly PreviewCandidate[]): void {
+    try {
+      this.services.onCandidatesChanged?.(candidates);
+    } catch {
+      // Candidate notifications are capability-neutral and never own M05 state.
+    }
   }
 
   private publish(
@@ -584,6 +593,7 @@ export class ProviderController {
         retryAfterSeconds: undefined,
         diagnostic: undefined,
       });
+      this.candidatesChanged([]);
       return;
     }
     if (
@@ -592,8 +602,10 @@ export class ProviderController {
       reason === "import-clear" ||
       reason === "m04-request-replacement" ||
       reason === "manual-input"
-    )
+    ) {
       this.publish({ candidates: [] });
+      this.candidatesChanged([]);
+    }
     this.preflight();
   }
 
@@ -612,7 +624,9 @@ export class ProviderController {
 
   public manualOperationAccepted(kind: "Prepare" | "Copy" | "Validate"): void {
     if (this.owner !== undefined || kind === "Copy") return;
+    const hadCandidates = this.currentSnapshot.candidates.length > 0;
     this.publish({ candidates: [] });
+    if (hadCandidates) this.candidatesChanged([]);
     this.preflight();
   }
 
@@ -789,6 +803,7 @@ export class ProviderController {
         requestId: transported.requestId,
         retryAfterSeconds: undefined,
       });
+      this.candidatesChanged(this.currentSnapshot.candidates);
       return operationResult("valid", "PROVIDER_VALID");
     } finally {
       secret = undefined;

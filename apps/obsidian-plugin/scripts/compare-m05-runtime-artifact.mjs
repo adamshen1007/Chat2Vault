@@ -46,6 +46,8 @@ export function compareM05RuntimeArtifacts(production, runtime) {
     "src/runtime-test-entry.ts",
     "src/runtime-test-network-seam.ts",
     "src/runtime-test-keychain.ts",
+    "src/runtime-test-m06.ts",
+    "src/runtime-test-mutation-ledger.ts",
   ]);
   for (const [input, identity] of productionInputs) {
     const runtimeIdentity = runtimeInputs.get(input);
@@ -96,6 +98,24 @@ export function compareM05RuntimeArtifacts(production, runtime) {
       bytesInOutput: productionContribution,
     },
   };
+}
+
+export function compareTrackedReleaseArtifacts(built, tracked) {
+  const failures = [];
+  for (const file of ["main.js", "worker.js"]) {
+    const expected = built[file];
+    const actual = tracked[file];
+    if (
+      expected === undefined ||
+      actual === undefined ||
+      expected.bytes !== actual.bytes ||
+      expected.sha256 !== actual.sha256
+    )
+      failures.push(
+        `tracked ${file} does not match the final production build`,
+      );
+  }
+  return { ok: failures.length === 0, failures };
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {

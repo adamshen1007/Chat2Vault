@@ -135,6 +135,79 @@
 .c2v-distillation-diagnostics p {
   overflow-wrap: anywhere;
 }
+.c2v-knowledge-review {
+  min-width: 0;
+  margin-block: var(--size-4-5);
+  border-top: 1px solid var(--c2v-rule);
+  padding-top: var(--size-4-4);
+  overflow-wrap: anywhere;
+}
+.c2v-knowledge-toolbar,
+.c2v-knowledge-actions,
+.c2v-knowledge-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  align-items: center;
+}
+.c2v-knowledge-review button,
+.c2v-knowledge-review input,
+.c2v-knowledge-review select,
+.c2v-knowledge-review textarea {
+  min-height: 44px;
+}
+.c2v-knowledge-review button:focus-visible,
+.c2v-knowledge-review input:focus-visible,
+.c2v-knowledge-review select:focus-visible,
+.c2v-knowledge-review textarea:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.c2v-knowledge-candidate,
+.c2v-knowledge-plan-entry,
+.c2v-knowledge-ledger {
+  min-width: 0;
+  border-left: 2px solid var(--interactive-accent);
+  padding-left: var(--size-4-3);
+  margin-block: var(--size-4-4);
+}
+.c2v-knowledge-selection {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  margin-block: var(--size-4-2);
+}
+.c2v-knowledge-editor label,
+.c2v-knowledge-editor input,
+.c2v-knowledge-editor textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+}
+.c2v-knowledge-editor label {
+  margin-top: var(--size-4-3);
+  font-weight: var(--font-semibold);
+}
+.c2v-knowledge-editor textarea {
+  min-height: 8rem;
+  resize: vertical;
+}
+.c2v-knowledge-plan pre {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre;
+}
+.c2v-knowledge-status-label {
+  font-weight: var(--font-semibold);
+}
+.c2v-knowledge-diagnostics,
+.c2v-knowledge-ledger {
+  overflow-wrap: anywhere;
+}
 .c2v-provider-panel {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -217,6 +290,10 @@
   .c2v-provider-preflight {
     grid-template-columns: 1fr;
   }
+  .c2v-knowledge-candidate-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 @container (max-width: 480px) {
   .c2v-layout {
@@ -232,5 +309,9 @@
   }
   .c2v-provider-preflight {
     grid-template-columns: 1fr;
+  }
+  .c2v-knowledge-candidate-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

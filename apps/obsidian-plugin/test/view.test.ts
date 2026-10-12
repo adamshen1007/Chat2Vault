@@ -12,12 +12,16 @@ import {
   type PreviewCandidate,
 } from "@chat2vault/core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { ImportController } from "../src/controller.js";
 import {
   Chat2VaultView,
+  type KnowledgeViewServices,
   type ManualDistillationViewServices,
 } from "../src/view.js";
+import type { KnowledgeVaultAdapter } from "../src/knowledge-vault-adapter.js";
 
 beforeAll(() => {
   HTMLElement.prototype.empty = function (): void {
@@ -197,7 +201,791 @@ async function openResult(
   return { view, controller };
 }
 
+async function openKnowledgeView(
+  options: {
+    knowledgeRoot?: string;
+    observation?: "absent" | "conflict";
+    createFails?: boolean;
+    failCreateAt?: number;
+    invalidateOnCreate?: boolean;
+    candidateCount?: number;
+    sourceRoot?: string;
+    sourcePath?: string;
+    sourceRootPending?: boolean;
+    knowledgeRootPending?: boolean;
+  } = {},
+): Promise<{
+  view: Chat2VaultView;
+  controller: ImportController;
+  adapter: KnowledgeVaultAdapter;
+  created: Map<string, Uint8Array>;
+  invalidate: (reason: "settings" | "unload") => void;
+}> {
+  const item = manualConversation();
+  const built = buildDistillationRequest(item);
+  if (!built.ok) throw new Error("Synthetic request failed");
+  const created = new Map<string, Uint8Array>();
+  let invalidator: ((reason: "settings" | "unload") => void) | undefined;
+  let createCalls = 0;
+  const adapter: KnowledgeVaultAdapter = {
+    resolveKnowledgeSources: async (candidate) => ({
+      ok: true,
+      sources: candidate.sourceRefs.map((sourceRef) => ({
+        ...sourceRef,
+        messageFingerprints: [...sourceRef.messageFingerprints],
+        sourceNotePath: options.sourcePath ?? "Sources/synthetic-source.md",
+      })),
+    }),
+    observeKnowledgeTarget: async (path) => {
+      if (options.observation === "conflict")
+        return {
+          status: "regular-file",
+          bytes: new TextEncoder().encode("different bytes"),
+        };
+      const bytes = created.get(path);
+      return bytes === undefined
+        ? { status: "absent" }
+        : { status: "regular-file", bytes: new Uint8Array(bytes) };
+    },
+    checkpointKnowledgeTarget: async (path) => ({
+      status: "absent-safe",
+      resolvedPath: path,
+    }),
+    createKnowledgeNote: async (path, content) => {
+      createCalls += 1;
+      if (options.createFails || createCalls === options.failCreateAt)
+        throw new Error("synthetic create failure");
+      created.set(path, new TextEncoder().encode(content));
+      if (options.invalidateOnCreate) invalidator?.("settings");
+    },
+    readKnowledgeNote: async (path) => {
+      const bytes = created.get(path);
+      if (bytes === undefined) throw new Error("missing synthetic note");
+      return new Uint8Array(bytes);
+    },
+  };
+  const knowledgeServices: KnowledgeViewServices = {
+    sourceRoot: () => options.sourceRoot ?? "Sources",
+    sourceRootPending: () => options.sourceRootPending ?? false,
+    sourceSettingsGeneration: () => 1,
+    knowledgeRoot: () => options.knowledgeRoot ?? "Knowledge",
+    knowledgeRootPending: () => options.knowledgeRootPending ?? false,
+    settingsGeneration: () => 1,
+    knowledgeWriterPlatformEligible: () => true,
+    adapter,
+    registerInvalidator: (next) => {
+      invalidator = next;
+      return () => {
+        invalidator = undefined;
+      };
+    },
+  };
+  const controller = new ImportController(() =>
+    Promise.resolve(importResult([item])),
+  );
+  const view = new Chat2VaultView(
+    {} as never,
+    controller,
+    () => 25,
+    undefined,
+    { writeClipboard: () => Promise.resolve() },
+    undefined,
+    knowledgeServices,
+  );
+  document.body.append(view.contentEl);
+  await view.onOpen();
+  await controller.import([
+    {
+      name: "synthetic.json",
+      size: 1,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)),
+    },
+  ]);
+  view.contentEl.querySelector<HTMLButtonElement>(".c2v-row")?.click();
+  view.contentEl
+    .querySelector<HTMLButtonElement>('[aria-label="Prepare manual prompt"]')
+    ?.click();
+  await flush();
+  const textarea = view.contentEl.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Paste strict JSON"]',
+  );
+  if (textarea === null) throw new Error("Missing manual result input");
+  textarea.value = JSON.stringify({
+    schemaVersion: 1,
+    contractVersion: "m04-manual-v1",
+    requestId: built.request.requestId,
+    conversationFingerprint: built.request.conversationFingerprint,
+    candidates: Array.from(
+      { length: options.candidateCount ?? 1 },
+      (_, index) => ({
+        type: "insight",
+        title:
+          index === 0
+            ? "<script>Exact knowledge title</script>"
+            : `Exact knowledge title ${String(index + 1)}`,
+        summary: `[[Exact summary stays inert ${String(index + 1)}]]`,
+        body: `Exact body ${String(index + 1)} <img src=x onerror=alert(1)>`,
+        confidence: "high",
+        sourceMessageFingerprints: [built.request.messages[0]!.fingerprint],
+        suggestedLinks: [],
+        suggestedTags: ["synthetic"],
+      }),
+    ),
+  });
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  view.contentEl
+    .querySelector<HTMLButtonElement>('[aria-label="Validate result"]')
+    ?.click();
+  await flush();
+  return {
+    view,
+    controller,
+    adapter,
+    created,
+    invalidate: (reason) => invalidator?.(reason),
+  };
+}
+
 describe("preview view", () => {
+  it("does not use innerHTML in the knowledge-review production view", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/view.ts"), "utf8");
+    expect(source).not.toMatch(/\.innerHTML\b/u);
+  });
+
+  it("renders labeled M06 decisions, bounded edits, and only eligible selection controls", async () => {
+    const { view } = await openKnowledgeView();
+    const candidate = view.contentEl.querySelector<HTMLElement>(
+      ".c2v-knowledge-candidate",
+    );
+    expect(candidate).not.toBeNull();
+    expect(candidate?.querySelector("script, img, a")).toBeNull();
+    expect(candidate?.textContent).toContain(
+      "<script>Exact knowledge title</script>",
+    );
+    expect(
+      candidate?.querySelector('[role="group"]')?.getAttribute("aria-label"),
+    ).toContain("Decision for");
+    expect(candidate?.textContent).toContain("Type: insight");
+    expect(candidate?.textContent).toContain("Confidence: high");
+    expect(candidate?.textContent).toContain("Provenance:");
+
+    const selection = candidate?.querySelector<HTMLInputElement>(
+      '[aria-label^="Select knowledge candidate"]',
+    );
+    expect(selection?.disabled).toBe(true);
+    const accept = Array.from(
+      candidate?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find((button) => button.textContent === "Accept");
+    accept?.click();
+    expect(
+      view.contentEl.querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )?.disabled,
+    ).toBe(false);
+    const selectAll = Array.from(
+      view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent === "Select all eligible");
+    expect(selectAll?.disabled).toBe(false);
+    selectAll?.click();
+    expect(
+      view.contentEl.querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )?.checked,
+    ).toBe(true);
+
+    const edit = Array.from(
+      view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    ).find((button) => button.textContent === "Edit");
+    edit?.click();
+    for (const label of [
+      "Knowledge title",
+      "Knowledge summary",
+      "Knowledge body",
+      "Knowledge tags, one per line",
+    ]) {
+      const field = view.contentEl.querySelector<
+        HTMLInputElement | HTMLTextAreaElement
+      >(`[aria-label="${label}"]`);
+      expect(field).not.toBeNull();
+      expect(field?.maxLength).toBeGreaterThan(0);
+    }
+    const title = view.contentEl.querySelector<HTMLInputElement>(
+      '[aria-label="Knowledge title"]',
+    );
+    const summary = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Knowledge summary"]',
+    );
+    const body = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Knowledge body"]',
+    );
+    const tags = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Knowledge tags, one per line"]',
+    );
+    if (title === null || summary === null || body === null || tags === null)
+      throw new Error("Missing knowledge edit fields");
+    title.value = "Edited title";
+    summary.value = "Edited summary";
+    body.value = "Edited body";
+    tags.value = "edited\nsecond-tag";
+    Array.from(
+      view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    )
+      .find((button) => button.textContent === "Save edit")
+      ?.click();
+    expect(view.contentEl.textContent).toContain("Edited title");
+    expect(view.contentEl.textContent).toContain("edited, second-tag");
+    expect(view.contentEl.textContent).toContain("edited");
+
+    Array.from(
+      view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    )
+      .find((button) => button.textContent === "Reject")
+      ?.click();
+    expect(
+      view.contentEl.querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )?.disabled,
+    ).toBe(true);
+    expect(
+      view.contentEl.querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )?.checked,
+    ).toBe(false);
+    await view.onClose();
+  });
+
+  it("revokes a ready plan on the first dirty edit and keeps invalid Save fail-closed with zero mutation", async () => {
+    const { view, created } = await openKnowledgeView();
+    const button = (label: string): HTMLButtonElement | undefined =>
+      Array.from(
+        view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((candidate) => candidate.textContent === label);
+    button("Accept")?.click();
+    view.contentEl
+      .querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )
+      ?.click();
+    button("Dry run")?.click();
+    await flush();
+    expect(button("Write")?.disabled).toBe(false);
+
+    button("Edit")?.click();
+    let title = view.contentEl.querySelector<HTMLInputElement>(
+      '[aria-label="Knowledge title"]',
+    );
+    if (title === null) throw new Error("Missing title editor");
+    title.value = "Dirty title";
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(button("Dry run")?.disabled).toBe(true);
+    expect(button("Write")?.disabled).toBe(true);
+    expect(view.contentEl.querySelector(".c2v-knowledge-plan")).toBeNull();
+    const integration = view as unknown as {
+      knowledgeController: { snapshot: { plan?: unknown } };
+    };
+    expect(integration.knowledgeController.snapshot.plan).toBeUndefined();
+    button("Write")?.click();
+    await flush();
+    expect(created).toHaveLength(0);
+
+    title = view.contentEl.querySelector<HTMLInputElement>(
+      '[aria-label="Knowledge title"]',
+    );
+    if (title === null) throw new Error("Missing dirty title editor");
+    title.value = "";
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+    button("Save edit")?.focus();
+    button("Save edit")?.click();
+    expect(view.contentEl.textContent).toContain("KNOWLEDGE_REVIEW_INVALID");
+    expect(document.activeElement).toBe(
+      view.contentEl.querySelector('[aria-label="Knowledge title"]'),
+    );
+    expect(button("Dry run")?.disabled).toBe(true);
+    expect(button("Write")?.disabled).toBe(true);
+    expect(created).toHaveLength(0);
+
+    title = view.contentEl.querySelector<HTMLInputElement>(
+      '[aria-label="Knowledge title"]',
+    );
+    if (title === null) throw new Error("Missing invalid title editor");
+    title.value = "Valid saved title";
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+    button("Save edit")?.click();
+    expect(button("Dry run")?.disabled).toBe(false);
+    expect(button("Write")?.disabled).toBe(true);
+    button("Dry run")?.click();
+    await flush();
+    expect(button("Write")?.disabled).toBe(false);
+    expect(created).toHaveLength(0);
+    await view.onClose();
+  });
+
+  it("restores deterministic keyboard focus after every M06 review transition", async () => {
+    const { view } = await openKnowledgeView();
+    const button = (label: string): HTMLButtonElement => {
+      const result = Array.from(
+        view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((candidate) => candidate.textContent === label);
+      if (result === undefined) throw new Error(`Missing ${label}`);
+      return result;
+    };
+    const selected = (): HTMLInputElement => {
+      const result = view.contentEl.querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      );
+      if (result === null) throw new Error("Missing selection");
+      return result;
+    };
+
+    button("Accept").focus();
+    button("Accept").click();
+    expect(document.activeElement).toBe(button("Accept"));
+
+    button("Edit").focus();
+    button("Edit").click();
+    let title = view.contentEl.querySelector<HTMLInputElement>(
+      '[aria-label="Knowledge title"]',
+    );
+    expect(document.activeElement).toBe(title);
+
+    button("Cancel edit").focus();
+    button("Cancel edit").click();
+    expect(document.activeElement).toBe(button("Edit"));
+
+    button("Edit").focus();
+    button("Edit").click();
+    title = view.contentEl.querySelector<HTMLInputElement>(
+      '[aria-label="Knowledge title"]',
+    );
+    if (title === null) throw new Error("Missing title editor");
+    title.value = "Keyboard saved title";
+    title.dispatchEvent(new Event("input", { bubbles: true }));
+    button("Save edit").focus();
+    button("Save edit").click();
+    expect(document.activeElement).toBe(button("Edit"));
+
+    button("Reject").focus();
+    button("Reject").click();
+    expect(document.activeElement).toBe(button("Reject"));
+
+    button("Accept").focus();
+    button("Accept").click();
+    selected().focus();
+    selected().click();
+    expect(document.activeElement).toBe(selected());
+    await view.onClose();
+  });
+
+  it("keeps edit labels bound to their own controls across simultaneous views", async () => {
+    const first = await openKnowledgeView();
+    const second = await openKnowledgeView();
+    for (const view of [first.view, second.view])
+      Array.from(view.contentEl.querySelectorAll<HTMLButtonElement>("button"))
+        .find((button) => button.textContent === "Edit")
+        ?.click();
+
+    const firstLabel = Array.from(
+      first.view.contentEl.querySelectorAll<HTMLLabelElement>("label"),
+    ).find((label) => label.textContent.startsWith("Knowledge title"));
+    const secondLabel = Array.from(
+      second.view.contentEl.querySelectorAll<HTMLLabelElement>("label"),
+    ).find((label) => label.textContent.startsWith("Knowledge title"));
+    const firstTitle = first.view.contentEl.querySelector<HTMLInputElement>(
+      '[aria-label="Knowledge title"]',
+    );
+    const secondTitle = second.view.contentEl.querySelector<HTMLInputElement>(
+      '[aria-label="Knowledge title"]',
+    );
+    expect(firstLabel?.control).toBe(firstTitle);
+    expect(secondLabel?.control).toBe(secondTitle);
+    expect(firstLabel?.control).not.toBe(secondLabel?.control);
+    expect(firstTitle?.id === "" || firstTitle?.id !== secondTitle?.id).toBe(
+      true,
+    );
+    await first.view.onClose();
+    await second.view.onClose();
+  });
+
+  it("requires eligible selection and valid non-overlapping roots before an exact dry-run", async () => {
+    const { view } = await openKnowledgeView();
+    const dryRun = (): HTMLButtonElement | undefined =>
+      Array.from(
+        view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent === "Dry run");
+    const write = (): HTMLButtonElement | undefined =>
+      Array.from(
+        view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent === "Write");
+    expect(dryRun()?.disabled).toBe(true);
+    expect(write()?.disabled).toBe(true);
+    Array.from(
+      view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    )
+      .find((button) => button.textContent === "Accept")
+      ?.click();
+    const select = view.contentEl.querySelector<HTMLInputElement>(
+      '[aria-label^="Select knowledge candidate"]',
+    );
+    select?.click();
+    expect(dryRun()?.disabled).toBe(false);
+    dryRun()?.click();
+    await flush();
+
+    const integration = view as unknown as {
+      knowledgeController: {
+        snapshot: {
+          status: string;
+          plan?: { entries: readonly { noteContent: string }[] };
+        };
+      };
+    };
+    const exactMarkdown =
+      integration.knowledgeController.snapshot.plan?.entries[0]?.noteContent;
+    expect(view.contentEl.textContent).toContain("Selected candidates: 1");
+    expect(view.contentEl.textContent).toContain("Target path:");
+    expect(view.contentEl.textContent).toContain("Action: create");
+    expect(
+      view.contentEl.querySelector(".c2v-knowledge-plan pre > code")
+        ?.textContent,
+    ).toBe(exactMarkdown);
+    expect(write()?.disabled).toBe(false);
+    expect(
+      view.contentEl.querySelector(".c2v-knowledge-plan script, img, a"),
+    ).toBeNull();
+    await view.onClose();
+
+    const overlap = await openKnowledgeView({ knowledgeRoot: "Sources/AI" });
+    Array.from(
+      overlap.view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    )
+      .find((button) => button.textContent === "Accept")
+      ?.click();
+    overlap.view.contentEl
+      .querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )
+      ?.click();
+    expect(
+      Array.from(
+        overlap.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent === "Dry run")?.disabled,
+    ).toBe(true);
+    await overlap.view.onClose();
+
+    const unconfigured = await openKnowledgeView({ knowledgeRoot: "" });
+    Array.from(
+      unconfigured.view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    )
+      .find((button) => button.textContent === "Accept")
+      ?.click();
+    unconfigured.view.contentEl
+      .querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )
+      ?.click();
+    expect(
+      Array.from(
+        unconfigured.view.contentEl.querySelectorAll<HTMLButtonElement>(
+          "button",
+        ),
+      ).find((button) => button.textContent === "Dry run")?.disabled,
+    ).toBe(true);
+    await unconfigured.view.onClose();
+  });
+
+  it("keeps dry-run and write disabled while the source-root save is pending", async () => {
+    const options = { sourceRootPending: false };
+    const { view, created } = await openKnowledgeView(options);
+    const button = (label: string): HTMLButtonElement | undefined =>
+      Array.from(
+        view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((candidate) => candidate.textContent === label);
+
+    options.sourceRootPending = true;
+    button("Accept")?.click();
+
+    expect(view.contentEl.textContent).toContain(
+      "The source folder setting is still being saved.",
+    );
+    expect(button("Dry run")?.disabled).toBe(true);
+    expect(button("Write")?.disabled).toBe(true);
+    expect(created.size).toBe(0);
+    await view.onClose();
+  });
+
+  it.each([
+    ["Sources#Archive", "Sources#Archive/Foo.md"],
+    ["Sources", "Sources/Foo#Archive.md"],
+    ["Sources^Archive", "Sources^Archive/Foo.md"],
+    ["Sources", "Sources/Foo^Archive.md"],
+    ["Sources%%Archive", "Sources%%Archive/Foo.md"],
+    ["Sources", "Sources/Foo%%Archive.md"],
+    ["Sources[[Archive", "Sources[[Archive/Foo.md"],
+    ["Sources", "Sources/Foo[[Archive.md"],
+    ["Sources]]Archive", "Sources]]Archive/Foo.md"],
+    ["Sources", "Sources/Foo]]Archive.md"],
+  ])(
+    "keeps dry-run and write closed for reserved source link %s/%s",
+    async (sourceRoot, sourcePath) => {
+      const { view, created } = await openKnowledgeView({
+        sourceRoot,
+        sourcePath,
+      });
+      const button = (label: string): HTMLButtonElement | undefined =>
+        Array.from(
+          view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+        ).find((candidate) => candidate.textContent === label);
+      button("Accept")?.click();
+      view.contentEl
+        .querySelector<HTMLInputElement>(
+          '[aria-label^="Select knowledge candidate"]',
+        )
+        ?.click();
+      button("Dry run")?.click();
+      await flush();
+
+      expect(view.contentEl.textContent).toContain(
+        "A knowledge source could not be resolved.",
+      );
+      expect(button("Write")?.disabled).toBe(true);
+      button("Write")?.click();
+      await flush();
+      expect(created.size).toBe(0);
+      await view.onClose();
+    },
+  );
+
+  it("blocks conflicts, writes only a current ready plan, and renders the complete content-free ledger", async () => {
+    const conflict = await openKnowledgeView({ observation: "conflict" });
+    Array.from(
+      conflict.view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    )
+      .find((button) => button.textContent === "Accept")
+      ?.click();
+    conflict.view.contentEl
+      .querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )
+      ?.click();
+    Array.from(
+      conflict.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Dry run")
+      ?.click();
+    await flush();
+    expect(conflict.view.contentEl.textContent).toContain("Action: conflict");
+    expect(
+      Array.from(
+        conflict.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent === "Write")?.disabled,
+    ).toBe(true);
+    await conflict.view.onClose();
+
+    const writable = await openKnowledgeView({ candidateCount: 2 });
+    for (const accept of Array.from(
+      writable.view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    ).filter((button) => button.textContent === "Accept"))
+      accept.click();
+    Array.from(
+      writable.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Select all eligible")
+      ?.click();
+    Array.from(
+      writable.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Dry run")
+      ?.click();
+    await flush();
+    Array.from(
+      writable.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Write")
+      ?.click();
+    await flush();
+    const ledger = writable.view.contentEl.querySelector(
+      ".c2v-knowledge-ledger",
+    );
+    expect(ledger?.textContent).toContain("created");
+    expect(ledger?.querySelectorAll("li")).toHaveLength(2);
+    expect(writable.created).toHaveLength(2);
+    const diagnostics = writable.view.contentEl.querySelector(
+      ".c2v-knowledge-diagnostics",
+    );
+    expect(diagnostics?.textContent ?? "").not.toContain("Exact body");
+
+    Array.from(
+      writable.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Dry run")
+      ?.click();
+    await flush();
+    Array.from(
+      writable.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Write")
+      ?.click();
+    await flush();
+    expect(
+      Array.from(
+        writable.view.contentEl.querySelectorAll(".c2v-knowledge-ledger li"),
+      ).map((entry) => entry.textContent),
+    ).toEqual([
+      expect.stringContaining("identical-no-op"),
+      expect.stringContaining("identical-no-op"),
+    ]);
+    await writable.view.onClose();
+
+    const partial = await openKnowledgeView({
+      candidateCount: 2,
+      failCreateAt: 2,
+    });
+    for (const accept of Array.from(
+      partial.view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    ).filter((button) => button.textContent === "Accept"))
+      accept.click();
+    Array.from(
+      partial.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Select all eligible")
+      ?.click();
+    Array.from(
+      partial.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Dry run")
+      ?.click();
+    await flush();
+    Array.from(
+      partial.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Write")
+      ?.click();
+    await flush();
+    expect(partial.view.contentEl.textContent).toContain(
+      "Write status: partial",
+    );
+    expect(
+      Array.from(
+        partial.view.contentEl.querySelectorAll(".c2v-knowledge-ledger li"),
+      ).map((entry) => entry.textContent),
+    ).toEqual([
+      expect.stringContaining("created"),
+      expect.stringContaining("create-failed"),
+    ]);
+    expect(
+      partial.view.contentEl.querySelector(
+        ".c2v-knowledge-ledger .c2v-knowledge-diagnostics",
+      )?.textContent ?? "",
+    ).not.toContain("Exact body");
+    await partial.view.onClose();
+
+    const stale = await openKnowledgeView({
+      candidateCount: 2,
+      invalidateOnCreate: true,
+    });
+    for (const accept of Array.from(
+      stale.view.contentEl.querySelectorAll<HTMLButtonElement>(
+        ".c2v-knowledge-candidate button",
+      ),
+    ).filter((button) => button.textContent === "Accept"))
+      accept.click();
+    Array.from(
+      stale.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Select all eligible")
+      ?.click();
+    Array.from(
+      stale.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Dry run")
+      ?.click();
+    await flush();
+    Array.from(
+      stale.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+    )
+      .find((button) => button.textContent === "Write")
+      ?.click();
+    await flush();
+    expect(stale.view.contentEl.textContent).toContain("Write status: stale");
+    expect(stale.view.contentEl.textContent).toContain("KNOWLEDGE_PLAN_STALE");
+    expect(
+      stale.view.contentEl.querySelectorAll(".c2v-knowledge-ledger li"),
+    ).toHaveLength(2);
+    expect(
+      stale.view.contentEl.querySelector(
+        ".c2v-knowledge-ledger .c2v-knowledge-diagnostics",
+      )?.textContent ?? "",
+    ).not.toContain("Exact body");
+    await stale.view.onClose();
+  });
+
+  it("installs only validated candidate replacements and invalidates review state on settings, selection, import, close, and unload", async () => {
+    const { view, invalidate } = await openKnowledgeView();
+    expect(
+      view.contentEl.querySelectorAll(".c2v-knowledge-candidate"),
+    ).toHaveLength(1);
+    invalidate("settings");
+    expect(view.contentEl.querySelector(".c2v-knowledge-candidate")).toBeNull();
+    expect(view.contentEl.textContent).not.toContain("Exact knowledge title");
+    await view.onClose();
+
+    const selection = await openKnowledgeView();
+    const search = selection.view.contentEl.querySelector<HTMLInputElement>(
+      'input[type="search"]',
+    );
+    if (search === null) throw new Error("Missing conversation search");
+    search.value = "no matching conversation";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(
+      selection.view.contentEl.querySelector(".c2v-knowledge-candidate"),
+    ).toBeNull();
+    await selection.view.onClose();
+
+    const imported = await openKnowledgeView();
+    await imported.controller.import([
+      {
+        name: "replacement.json",
+        size: 1,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(1)),
+      },
+    ]);
+    expect(
+      imported.view.contentEl.querySelector(".c2v-knowledge-candidate"),
+    ).toBeNull();
+    await imported.view.onClose();
+
+    const unloaded = await openKnowledgeView();
+    unloaded.invalidate("unload");
+    const unloadedIntegration = unloaded.view as unknown as {
+      loaded: boolean;
+      knowledgeController: { snapshot: { status: string } };
+    };
+    expect(unloadedIntegration.loaded).toBe(false);
+    expect(unloadedIntegration.knowledgeController.snapshot.status).toBe(
+      "empty",
+    );
+    await unloaded.view.onClose();
+    expect(unloaded.view.contentEl.childElementCount).toBe(0);
+  });
+
   it("renders provider preflight and execute controls without candidate write actions", async () => {
     const item = manualConversation();
     const controller = new ImportController(() =>
@@ -647,6 +1435,24 @@ describe("preview view", () => {
         suggestedTags: [],
       };
       let failProviderTransport = false;
+      let invalidateProviderResult = false;
+      const knowledgeAdapter: KnowledgeVaultAdapter = {
+        resolveKnowledgeSources: async (candidate) => ({
+          ok: true,
+          sources: candidate.sourceRefs.map((sourceRef) => ({
+            ...sourceRef,
+            messageFingerprints: [...sourceRef.messageFingerprints],
+            sourceNotePath: "Sources/synthetic-source.md",
+          })),
+        }),
+        observeKnowledgeTarget: async () => ({ status: "absent" }),
+        checkpointKnowledgeTarget: async (path) => ({
+          status: "absent-safe",
+          resolvedPath: path,
+        }),
+        createKnowledgeNote: async () => undefined,
+        readKnowledgeNote: async () => new Uint8Array(),
+      };
       const view = new Chat2VaultView(
         {} as never,
         controller,
@@ -690,14 +1496,28 @@ describe("preview view", () => {
                     }),
                   ),
                 }),
-          validateResult: () => ({
-            ok: true,
-            candidates: [providerCandidate],
-          }),
+          validateResult: () =>
+            invalidateProviderResult
+              ? { ok: false, diagnostics: [] }
+              : {
+                  ok: true,
+                  candidates: [providerCandidate],
+                },
           observeCredentialOnViewOpen: () => ({
             ok: true,
             status: "configured",
           }),
+          registerInvalidator: () => () => undefined,
+        },
+        {
+          sourceRoot: () => "Sources",
+          sourceRootPending: () => false,
+          sourceSettingsGeneration: () => 1,
+          knowledgeRoot: () => "Knowledge",
+          knowledgeRootPending: () => false,
+          settingsGeneration: () => 1,
+          knowledgeWriterPlatformEligible: () => true,
+          adapter: knowledgeAdapter,
           registerInvalidator: () => () => undefined,
         },
       );
@@ -752,8 +1572,24 @@ describe("preview view", () => {
       expect(view.contentEl.textContent).toContain("Provider winner");
       expect(view.contentEl.textContent).not.toContain("Manual winner");
       expect(
-        view.contentEl.querySelectorAll(".c2v-candidate-preview"),
+        view.contentEl.querySelectorAll(".c2v-knowledge-candidate"),
       ).toHaveLength(1);
+      expect(
+        view.contentEl.querySelector(".c2v-knowledge-candidate")?.textContent,
+      ).toContain("Provider winner");
+      invalidateProviderResult = true;
+      view.contentEl
+        .querySelector<HTMLButtonElement>(".c2v-provider-distill")
+        ?.click();
+      await flush();
+      expect(view.contentEl.textContent).toContain("Provider winner");
+      expect(view.contentEl.textContent).toContain(
+        "The provider result did not satisfy the distillation contract.",
+      );
+      expect(
+        view.contentEl.querySelector(".c2v-knowledge-candidate")?.textContent,
+      ).toContain("Provider winner");
+      invalidateProviderResult = false;
       failProviderTransport = true;
       view.contentEl
         .querySelector<HTMLButtonElement>(".c2v-provider-distill")

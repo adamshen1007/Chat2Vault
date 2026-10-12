@@ -47,6 +47,7 @@ import {
   createObsidianSourceVaultIO,
   ObsidianSourceMutationAdapter,
 } from "./source-vault-adapter.js";
+import { ObsidianKnowledgeVaultAdapter } from "./knowledge-vault-adapter.js";
 
 export function resolveNativePluginDirectory(
   configuredPluginDir: unknown,
@@ -114,6 +115,9 @@ export default class Chat2VaultPlugin extends Plugin {
     (reason: ProviderInvalidationReason) => void
   >();
   private readonly providerStateObservers = new Set<() => void>();
+  private readonly knowledgeInvalidators = new Set<
+    (reason: "settings" | "unload") => void
+  >();
   private providerCredentialState:
     "unknown" | "configured" | "missing" | "unavailable" = "unknown";
   private pluginGeneration = 0;
@@ -132,6 +136,8 @@ export default class Chat2VaultPlugin extends Plugin {
       () => {
         for (const invalidate of this.sourceInvalidators)
           invalidate("settings");
+        for (const invalidate of this.knowledgeInvalidators)
+          invalidate("settings");
       },
       {
         onIdentityAuthorized: (installationId) => {
@@ -144,63 +150,92 @@ export default class Chat2VaultPlugin extends Plugin {
             this.notifyProviderStateObservers();
           }
         },
+        invalidateKnowledgeState: () => {
+          if (this.isCurrentLoad(loadGeneration))
+            for (const invalidate of this.knowledgeInvalidators)
+              invalidate("settings");
+        },
       },
     );
     this.controller = new ImportController(runImportInWorker);
     const controller = this.controller;
-    this.registerView(
-      VIEW_TYPE,
-      (leaf) =>
-        new Chat2VaultView(
-          leaf,
-          controller,
-          () =>
-            this.settingsController?.settings.previewMessagesPerPage ??
-            this.settings.previewMessagesPerPage,
-          {
-            sourceRoot: () =>
-              this.settingsController?.settings.sourceRoot ??
-              this.settings.sourceRoot,
-            sourceRootPending: () =>
-              this.settingsController?.sourceRootPersistenceState.status ===
-              "pending",
-            settingsGeneration: () =>
-              this.settingsController?.sourceWriteGeneration ?? 0,
-            sourceWriterPlatformEligible: () =>
-              sourceWriterPlatformEligible(process.platform, process.arch),
-            createAdapter: (source, conversation) =>
-              this.createSourceAdapter(source, conversation),
-            registerInvalidator: (invalidator) => {
-              this.sourceInvalidators.add(invalidator);
-              return () => this.sourceInvalidators.delete(invalidator);
-            },
+    this.registerView(VIEW_TYPE, (leaf) => {
+      const knowledgeAdapter = this.createKnowledgeAdapter();
+      return new Chat2VaultView(
+        leaf,
+        controller,
+        () =>
+          this.settingsController?.settings.previewMessagesPerPage ??
+          this.settings.previewMessagesPerPage,
+        {
+          sourceRoot: () =>
+            this.settingsController?.settings.sourceRoot ??
+            this.settings.sourceRoot,
+          sourceRootPending: () =>
+            this.settingsController?.sourceRootPersistenceState.status ===
+            "pending",
+          settingsGeneration: () =>
+            this.settingsController?.sourceWriteGeneration ?? 0,
+          sourceWriterPlatformEligible: () =>
+            sourceWriterPlatformEligible(process.platform, process.arch),
+          createAdapter: (source, conversation) =>
+            this.createSourceAdapter(source, conversation),
+          registerInvalidator: (invalidator) => {
+            this.sourceInvalidators.add(invalidator);
+            return () => this.sourceInvalidators.delete(invalidator);
           },
-          {
-            writeClipboard: (text) => navigator.clipboard.writeText(text),
-            registerInvalidator: (invalidator) => {
-              this.distillationInvalidators.add(invalidator);
-              return () => this.distillationInvalidators.delete(invalidator);
-            },
+        },
+        {
+          writeClipboard: (text) => navigator.clipboard.writeText(text),
+          registerInvalidator: (invalidator) => {
+            this.distillationInvalidators.add(invalidator);
+            return () => this.distillationInvalidators.delete(invalidator);
           },
-          {
-            current: () => this.providerCurrent(),
-            readCredential: readCredentialForOperation,
-            transport: sendOpenAICompatibleRequest,
-            observeCredentialOnViewOpen: () =>
-              this.isCurrentLoad(loadGeneration) &&
-              this.settingsController?.identityState === "authoritative"
-                ? credentialStatus()
-                : { ok: true, status: "unavailable" },
-            registerInvalidator: (invalidator) => {
-              this.providerInvalidators.add(invalidator);
-              return () => this.providerInvalidators.delete(invalidator);
-            },
-            registerStateObserver: (observer) => {
-              return this.registerStateObserver(observer);
-            },
+        },
+        {
+          current: () => this.providerCurrent(),
+          readCredential: readCredentialForOperation,
+          transport: sendOpenAICompatibleRequest,
+          observeCredentialOnViewOpen: () =>
+            this.isCurrentLoad(loadGeneration) &&
+            this.settingsController?.identityState === "authoritative"
+              ? credentialStatus()
+              : { ok: true, status: "unavailable" },
+          registerInvalidator: (invalidator) => {
+            this.providerInvalidators.add(invalidator);
+            return () => this.providerInvalidators.delete(invalidator);
           },
-        ),
-    );
+          registerStateObserver: (observer) => {
+            return this.registerStateObserver(observer);
+          },
+        },
+        {
+          sourceRoot: () =>
+            this.settingsController?.settings.sourceRoot ??
+            this.settings.sourceRoot,
+          sourceRootPending: () =>
+            this.settingsController?.sourceRootPersistenceState.status ===
+            "pending",
+          sourceSettingsGeneration: () =>
+            this.settingsController?.sourceWriteGeneration ?? 0,
+          knowledgeRoot: () =>
+            this.settingsController?.settings.knowledgeRoot ??
+            this.settings.knowledgeRoot,
+          knowledgeRootPending: () =>
+            this.settingsController?.knowledgeRootPersistenceState.status ===
+            "pending",
+          settingsGeneration: () =>
+            this.settingsController?.knowledgeWriteGeneration ?? 0,
+          knowledgeWriterPlatformEligible: () =>
+            sourceWriterPlatformEligible(process.platform, process.arch),
+          adapter: knowledgeAdapter,
+          registerInvalidator: (invalidator) => {
+            this.knowledgeInvalidators.add(invalidator);
+            return () => this.knowledgeInvalidators.delete(invalidator);
+          },
+        },
+      );
+    });
     this.addCommand({
       id: "import-chatgpt-export",
       name: "Import ChatGPT export",
@@ -237,6 +272,8 @@ export default class Chat2VaultPlugin extends Plugin {
     this.invalidateProvider("plugin-unload");
     this.providerInvalidators.clear();
     this.providerStateObservers.clear();
+    for (const invalidate of this.knowledgeInvalidators) invalidate("unload");
+    this.knowledgeInvalidators.clear();
     this.settingsController?.discardUnpersistedIdentityOnUnload();
     this.controller?.close();
   }
@@ -308,6 +345,12 @@ export default class Chat2VaultPlugin extends Plugin {
   }
   public async saveSourceRoot(value: unknown) {
     const result = await this.settingsController?.saveSourceRoot(value);
+    if (this.settingsController !== undefined)
+      this.settings = this.settingsController.settings;
+    return result;
+  }
+  public async saveKnowledgeRoot(value: unknown) {
+    const result = await this.settingsController?.saveKnowledgeRoot(value);
     if (this.settingsController !== undefined)
       this.settings = this.settingsController.settings;
     return result;
@@ -449,6 +492,40 @@ export default class Chat2VaultPlugin extends Plugin {
         "pending",
       process.platform,
       () => this.loaded,
+    );
+  }
+  private createKnowledgeAdapter(): ObsidianKnowledgeVaultAdapter {
+    const io = createObsidianSourceVaultIO(this.app);
+    const pluginDir = resolveNativePluginDirectory(
+      this.manifest.dir,
+      this.app.vault.configDir,
+      this.manifest.id,
+    );
+    const nativeConfigured =
+      io.basePath !== "" &&
+      isM03WellFormedString(io.basePath) &&
+      pluginDir !== undefined &&
+      configureNativeObserver(
+        join(
+          io.basePath,
+          ...pluginDir.split("/"),
+          "native",
+          "source_observer.node",
+        ),
+      );
+    return new ObsidianKnowledgeVaultAdapter(
+      io,
+      io.basePath === "" || !nativeConfigured
+        ? undefined
+        : createDesktopNativeAdapter(),
+      () =>
+        this.settingsController?.settings.sourceRoot ??
+        this.settings.sourceRoot,
+      () =>
+        this.settingsController?.settings.knowledgeRoot ??
+        this.settings.knowledgeRoot,
+      process.platform,
+      process.arch,
     );
   }
 }

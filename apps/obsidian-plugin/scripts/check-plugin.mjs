@@ -38,6 +38,49 @@ const forbiddenNames = new Set([
 ]);
 const failures = [];
 const mainSourceText = readFileSync(join(sourceRoot, "main.ts"), "utf8");
+const vaultMutations = new Set([
+  "append",
+  "appendBinary",
+  "appendFile",
+  "copy",
+  "create",
+  "createBinary",
+  "createFolder",
+  "delete",
+  "mkdir",
+  "modify",
+  "modifyBinary",
+  "process",
+  "remove",
+  "rename",
+  "rmdir",
+  "rm",
+  "trash",
+  "trashFile",
+  "trashLocal",
+  "trashSystem",
+  "truncate",
+  "unlink",
+  "write",
+  "writeBinary",
+  "writeFile",
+]);
+
+function forbiddenVaultMutationAccess(node) {
+  if (ts.isPropertyAccessExpression(node))
+    return vaultMutations.has(node.name.text)
+      ? { method: node.name.text, receiver: node.expression }
+      : undefined;
+  if (
+    ts.isElementAccessExpression(node) &&
+    node.argumentExpression !== undefined &&
+    (ts.isStringLiteral(node.argumentExpression) ||
+      ts.isNoSubstitutionTemplateLiteral(node.argumentExpression)) &&
+    vaultMutations.has(node.argumentExpression.text)
+  )
+    return { method: node.argumentExpression.text, receiver: node.expression };
+  return undefined;
+}
 
 if (
   !/export function sourceWriterPlatformEligible\([\s\S]*?platform === "darwin" && arch === "x64";/u.test(
@@ -133,31 +176,34 @@ for (const file of files) {
         "href",
         "src",
         "srcset",
-      ].includes(node.name.text)
+      ].includes(node.name.text) &&
+      !(
+        basename(file) === "view.ts" &&
+        node.name.text === "write" &&
+        node.expression.getText(source) === "controller"
+      )
     )
       failures.push(`${file}: forbidden property ${node.name.text}`);
-    if (ts.isPropertyAccessExpression(node)) {
-      const vaultMutations = [
-        "create",
-        "createFolder",
-        "modify",
-        "delete",
-        "rename",
-        "trash",
-        "copy",
-      ];
+    const vaultMutation = forbiddenVaultMutationAccess(node);
+    if (vaultMutation !== undefined) {
       if (
-        vaultMutations.includes(node.name.text) &&
-        /(?:vault|adapter|\bio\b)/iu.test(node.expression.getText(source))
+        /(?:vault|adapter|writer|\bio\b)/iu.test(
+          vaultMutation.receiver.getText(source),
+        )
       ) {
         const fileName = basename(file);
         const allowed =
           (fileName === "source-vault-adapter.ts" &&
-            ["create", "createFolder"].includes(node.name.text)) ||
+            ["create", "createFolder"].includes(vaultMutation.method)) ||
           (fileName === "source-executor.ts" &&
-            node.name.text === "createFolder");
+            vaultMutation.method === "createFolder") ||
+          (fileName === "knowledge-vault-adapter.ts" &&
+            vaultMutation.method === "create" &&
+            vaultMutation.receiver.getText(source) === "this.#context.io");
         if (!allowed)
-          failures.push(`${file}: forbidden vault mutation ${node.name.text}`);
+          failures.push(
+            `${file}: forbidden vault mutation ${vaultMutation.method}`,
+          );
       }
     }
     ts.forEachChild(node, visit);
