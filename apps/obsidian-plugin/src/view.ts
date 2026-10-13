@@ -59,8 +59,14 @@ import {
   type ProviderInvalidationReason,
 } from "./provider-controller.js";
 import { KnowledgeController } from "./knowledge-controller.js";
+import {
+  KnowledgeDedupController,
+  type DedupDiagnostic,
+  type DedupWriteResult,
+} from "./knowledge-dedup-controller.js";
+import type { ObsidianKnowledgeCatalogAdapter } from "./knowledge-catalog-adapter.js";
 import type { KnowledgeVaultAdapter } from "./knowledge-vault-adapter.js";
-import type { KnowledgeWriteExecutionResult } from "./knowledge-executor.js";
+import { KnowledgeDedupPanel } from "./dedup-panel.js";
 
 export const VIEW_TYPE = "chat-to-vault-preview";
 
@@ -119,6 +125,8 @@ export interface KnowledgeViewServices {
   settingsGeneration(): number;
   knowledgeWriterPlatformEligible(): boolean;
   adapter: KnowledgeVaultAdapter;
+  catalog?: Pick<ObsidianKnowledgeCatalogAdapter, "readKnowledgeCatalog">;
+  openKnowledgeNote?(path: string): Promise<void>;
   registerInvalidator(
     invalidator: (reason: "settings" | "unload") => void,
   ): () => void;
@@ -185,7 +193,10 @@ export class Chat2VaultView extends ItemView {
   private unregisterProviderStateObserver?: () => void;
   private readonly providerStatusRegion: HTMLParagraphElement;
   private knowledgeController?: KnowledgeController;
-  private knowledgeWriteResult: KnowledgeWriteExecutionResult | undefined;
+  private knowledgeGate?: KnowledgeDedupController;
+  private knowledgeDedupPanel?: KnowledgeDedupPanel;
+  private knowledgeDedupRoot?: HTMLElement;
+  private knowledgeWriteResult: DedupWriteResult | undefined;
   private knowledgeEditDraft: KnowledgeEditDraft | undefined;
   private knowledgeEditDiagnostics: readonly M06Diagnostic[] = [];
   private distillationGeneration = 0;
@@ -277,6 +288,33 @@ export class Chat2VaultView extends ItemView {
         }),
         adapter: knowledgeServices.adapter,
       });
+      this.knowledgeGate = new KnowledgeDedupController(
+        this.knowledgeController,
+        knowledgeServices.catalog ?? {
+          readKnowledgeCatalog: () =>
+            Promise.resolve({
+              status: "blocked",
+              code: "M07_CATALOG_UNAVAILABLE",
+            }),
+        },
+        {
+          current: () => ({
+            loaded: this.loaded,
+            lifecycleGeneration: this.viewGeneration,
+            importGeneration: this.importGeneration,
+            selectionGeneration: this.selectionGeneration,
+            distillationGeneration: this.distillationGeneration,
+            sourceSettingsGeneration:
+              knowledgeServices.sourceSettingsGeneration(),
+            knowledgeSettingsGeneration: knowledgeServices.settingsGeneration(),
+            sourceRootPending: knowledgeServices.sourceRootPending(),
+            knowledgeRootPending: knowledgeServices.knowledgeRootPending(),
+            sourceRoot: knowledgeServices.sourceRoot(),
+            knowledgeRoot: knowledgeServices.knowledgeRoot(),
+          }),
+          adapter: knowledgeServices.adapter,
+        },
+      );
       this.unregisterKnowledgeInvalidator =
         knowledgeServices.registerInvalidator((reason) => {
           if (reason === "unload") this.loaded = false;
@@ -706,14 +744,17 @@ export class Chat2VaultView extends ItemView {
     this.knowledgeEditDraft = undefined;
     this.knowledgeEditDiagnostics = [];
     this.knowledgeWriteResult = undefined;
-    if (!controller.installCandidates(candidates)) controller.invalidate();
+    if (!this.knowledgeGate?.installCandidates(candidates))
+      controller.invalidate();
   }
 
   private invalidateKnowledgeState(): void {
+    this.knowledgeDedupPanel?.invalidate();
     this.knowledgeEditDraft = undefined;
     this.knowledgeEditDiagnostics = [];
     this.knowledgeWriteResult = undefined;
     this.knowledgeController?.invalidate();
+    this.knowledgeGate?.invalidate();
   }
 
   private drawManualDistillation(parent: HTMLElement): void {
@@ -887,6 +928,7 @@ export class Chat2VaultView extends ItemView {
     const services = this.knowledgeServices;
     if (controller === undefined || services === undefined) return;
     const snapshot = controller.snapshot;
+    const dedup = this.knowledgeGate?.snapshot;
     const sourcePending = services.sourceRootPending();
     const knowledgePending = services.knowledgeRootPending();
     const pending = sourcePending || knowledgePending;
@@ -949,7 +991,7 @@ export class Chat2VaultView extends ItemView {
       ({ decision }) => decision === "accepted" || decision === "edited",
     );
     const selectAll = this.button(toolbar, "Select all eligible", () => {
-      controller.selectAllEligible(true);
+      this.knowledgeGate?.selectAllEligible(true);
       this.knowledgeWriteResult = undefined;
       this.draw(this.controller.snapshot);
     });
@@ -1025,6 +1067,7 @@ export class Chat2VaultView extends ItemView {
     write.disabled =
       pending ||
       editBlocked ||
+      dedup?.canWrite !== true ||
       snapshot.status !== "ready" ||
       snapshot.plan?.status !== "ready";
 
@@ -1049,6 +1092,32 @@ export class Chat2VaultView extends ItemView {
       }
     }
     this.drawKnowledgeDiagnostics(panel, snapshot.diagnostics);
+    if (dedup !== undefined) {
+      this.drawKnowledgeDiagnostics(panel, dedup.diagnostics);
+      if (this.knowledgeDedupRoot === undefined) {
+        this.knowledgeDedupRoot = panel.ownerDocument.createElement("section");
+        const gate = this.knowledgeGate;
+        if (gate === undefined) return;
+        this.knowledgeDedupPanel = new KnowledgeDedupPanel(
+          this.knowledgeDedupRoot,
+          {
+            previewCombined: (id, path, draft, displayedSelectedDigest) =>
+              gate.previewCombined(id, path, draft, displayedSelectedDigest),
+            createCombined: () => gate.createCombined(),
+            readKnowledgeNote: (path) =>
+              services.adapter.readKnowledgeNote(path),
+            openKnowledgeNote: (path) =>
+              services.openKnowledgeNote?.(path) ?? Promise.resolve(),
+          },
+        );
+      }
+      panel.append(this.knowledgeDedupRoot);
+      this.knowledgeDedupPanel?.render({
+        candidates: snapshot.candidates,
+        matches: dedup.matches,
+        diagnostics: dedup.diagnostics,
+      });
+    }
     if (this.knowledgeWriteResult !== undefined)
       this.drawKnowledgeLedger(panel, this.knowledgeWriteResult);
   }
@@ -1105,7 +1174,7 @@ export class Chat2VaultView extends ItemView {
           };
           this.knowledgeEditDiagnostics = [];
         } else {
-          controller.decide(candidate.id, decision);
+          this.knowledgeGate?.decide(candidate.id, decision);
           this.knowledgeEditDraft = undefined;
           this.knowledgeEditDiagnostics = [];
           this.knowledgeWriteResult = undefined;
@@ -1154,7 +1223,7 @@ export class Chat2VaultView extends ItemView {
     selection.setAttr("data-c2v-knowledge-candidate", candidate.id);
     selection.setAttr("data-c2v-knowledge-control", "selection");
     selection.addEventListener("change", () => {
-      controller.select(candidate.id, selection.checked);
+      this.knowledgeGate?.select(candidate.id, selection.checked);
       this.knowledgeWriteResult = undefined;
       this.draw(this.controller.snapshot);
       this.focusKnowledgeControl(candidate.id, "selection");
@@ -1218,7 +1287,7 @@ export class Chat2VaultView extends ItemView {
     });
     const save = this.button(actions, "Save edit", () => {
       updateDraft();
-      const result = this.knowledgeController?.edit(candidate.id, {
+      const result = this.knowledgeGate?.edit(candidate.id, {
         title: title.value,
         summary: summary.value,
         body: body.value,
@@ -1288,7 +1357,7 @@ export class Chat2VaultView extends ItemView {
         ({ id }) => id === candidateId,
       );
       if (candidate !== undefined)
-        this.knowledgeController?.select(candidateId, candidate.selected);
+        this.knowledgeGate?.select(candidateId, candidate.selected);
     }
     this.contentEl.querySelector(".c2v-knowledge-plan")?.remove();
     this.contentEl.querySelector(".c2v-knowledge-ledger")?.remove();
@@ -1327,7 +1396,7 @@ export class Chat2VaultView extends ItemView {
 
   private drawKnowledgeDiagnostics(
     parent: HTMLElement,
-    diagnostics: readonly M06Diagnostic[],
+    diagnostics: readonly (M06Diagnostic | DedupDiagnostic)[],
   ): void {
     if (diagnostics.length === 0) return;
     const list = parent.createEl("section", {
@@ -1343,7 +1412,7 @@ export class Chat2VaultView extends ItemView {
 
   private drawKnowledgeLedger(
     parent: HTMLElement,
-    result: KnowledgeWriteExecutionResult,
+    result: DedupWriteResult,
   ): void {
     const ledger = parent.createEl("section", {
       cls: "c2v-knowledge-ledger",
@@ -1363,7 +1432,7 @@ export class Chat2VaultView extends ItemView {
   }
 
   private async previewKnowledge(): Promise<void> {
-    const controller = this.knowledgeController;
+    const controller = this.knowledgeGate;
     if (
       controller === undefined ||
       this.knowledgeEditDraft?.dirty === true ||
@@ -1371,21 +1440,21 @@ export class Chat2VaultView extends ItemView {
     )
       return;
     this.knowledgeWriteResult = undefined;
-    const pending = controller.preview();
+    const pending = controller.previewOrdinary();
     this.draw(this.controller.snapshot);
     await pending;
     if (this.loaded) this.draw(this.controller.snapshot);
   }
 
   private async writeKnowledge(): Promise<void> {
-    const controller = this.knowledgeController;
+    const controller = this.knowledgeGate;
     if (
       controller === undefined ||
       this.knowledgeEditDraft?.dirty === true ||
       this.knowledgeEditDraft?.invalid === true
     )
       return;
-    const pending = Promise.resolve(controller.write());
+    const pending = controller.writeOrdinary();
     this.draw(this.controller.snapshot);
     const result = await pending;
     if (!this.loaded) return;

@@ -173,3 +173,27 @@ export {
   knowledgeWritePlanEqual,
   planKnowledgeWrite,
 } from "./knowledge-writer/planner.js";
+export type {
+  CatalogSourceNote,
+  CatalogKnowledgeNote,
+  CatalogV1KnowledgeNote,
+  CatalogV2KnowledgeNote,
+  CatalogParseResult,
+  MatchInput,
+  KnowledgeMatchResult,
+} from "./knowledge-catalog/contracts.js";
+export {
+  knowledgeContentFingerprint,
+  parseKnowledgeCatalogNote,
+  v2CandidateFingerprint,
+} from "./knowledge-catalog/parse.js";
+export { matchKnowledgeCandidate } from "./knowledge-catalog/match.js";
+export {
+  renderCombinedKnowledgeNote,
+  validateCombinedDraft,
+} from "./knowledge-catalog/combine.js";
+export type {
+  CombinedKnowledgeInput,
+  CombinedKnowledgePlanEntry,
+  CombinedRenderResult,
+} from "./knowledge-catalog/combine.js";

@@ -3,6 +3,12 @@ import { basename, join } from "node:path";
 import process from "node:process";
 import { URL } from "node:url";
 import ts from "typescript";
+import {
+  isApprovedM07BaseAccess,
+  isApprovedM07OrdinaryWrite,
+  checkM07PinnedSource,
+  checkM07PinnedArtifact,
+} from "./check-m07-boundaries.mjs";
 
 const root = new URL("..", import.meta.url).pathname;
 const sourceRoot = join(root, "src");
@@ -149,6 +155,17 @@ for (const file of files) {
       failures.push(`${file}: CommonJS require is forbidden in plugin source`);
     if (ts.isIdentifier(node) && forbiddenNames.has(node.text))
       failures.push(`${file}: forbidden API ${node.text}`);
+    if (
+      basename(file) === "knowledge-dedup-controller.ts" &&
+      (ts.isPropertyAccessExpression(node) ||
+        ts.isElementAccessExpression(node)) &&
+      node.expression.getText(source) === "this" &&
+      (ts.isPropertyAccessExpression(node)
+        ? node.name.text === "base"
+        : true) &&
+      !isApprovedM07BaseAccess(node, source, basename(file))
+    )
+      failures.push(`${file}: unapproved M06 writer capability acquisition`);
     if (ts.isIdentifier(node) && node.text === "clipboard") {
       const property = node.parent;
       const write = property?.parent;
@@ -169,6 +186,7 @@ for (const file of files) {
         "outerHTML",
         "insertAdjacentHTML",
         "write",
+        "writeAfterDedupGate",
         "appendFile",
         "writeFile",
         "createContextualFragment",
@@ -178,9 +196,10 @@ for (const file of files) {
         "srcset",
       ].includes(node.name.text) &&
       !(
-        basename(file) === "view.ts" &&
-        node.name.text === "write" &&
-        node.expression.getText(source) === "controller"
+        (basename(file) === "view.ts" &&
+          node.name.text === "write" &&
+          node.expression.getText(source) === "controller") ||
+        isApprovedM07OrdinaryWrite(node, source, basename(file))
       )
     )
       failures.push(`${file}: forbidden property ${node.name.text}`);
@@ -210,6 +229,11 @@ for (const file of files) {
   };
   visit(source);
 }
+failures.push(
+  ...checkM07PinnedSource(
+    readFileSync(join(sourceRoot, "knowledge-dedup-controller.ts"), "utf8"),
+  ).failures.map((reason) => `knowledge-dedup-controller.ts: ${reason}`),
+);
 
 const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8"));
 const packageJson = JSON.parse(
@@ -236,6 +260,11 @@ const bundles = ["main.js", "worker.js"].map((name) => ({
   name,
   text: readFileSync(join(root, name), "utf8"),
 }));
+failures.push(
+  ...checkM07PinnedArtifact(bundles[0].text).failures.map(
+    (reason) => `main.js: ${reason}`,
+  ),
+);
 const forbiddenBundlePatterns = [
   [
     "browser network API",

@@ -64,6 +64,12 @@ export interface KnowledgeControllerSnapshot {
   readonly diagnostics: readonly M06Diagnostic[];
 }
 
+/** Read-only view of the installed M06 authority; never grants write capability. */
+export interface KnowledgeOrdinaryAuthority {
+  readonly token: Readonly<BaseToken>;
+  readonly plan: ExecutableKnowledgeWritePlan;
+}
+
 export type KnowledgePreviewResult =
   | { status: "planned"; plan: KnowledgeWritePlan }
   | {
@@ -293,6 +299,16 @@ export class KnowledgeController {
     )
       this.clearPlan();
     return this.currentSnapshot;
+  }
+
+  public ordinaryAuthority(): KnowledgeOrdinaryAuthority | undefined {
+    const installed = this.installed;
+    if (installed === undefined || !this.tokenCurrent(installed.token))
+      return undefined;
+    return Object.freeze({
+      token: Object.freeze({ ...installed.token }),
+      plan: installed.plan,
+    });
   }
 
   private publish(
