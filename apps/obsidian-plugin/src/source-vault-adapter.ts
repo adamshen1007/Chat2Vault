@@ -23,6 +23,8 @@ import {
   verifyNativeComponent,
   type NativeContainmentAdapter,
 } from "./containment.js";
+import type { CatalogVaultReadIO } from "./catalog-observer.js";
+import { readNativeVaultFileBounded } from "./native-observer.js";
 import type {
   MutationCheckpoint,
   SafetyCheckpoint,
@@ -89,8 +91,23 @@ export interface SourceVaultIO {
   list(path: string): Promise<VaultPathEntry[]>;
   lookup(path: string): Promise<VaultPathEntry | undefined>;
   readBinary(path: string): Promise<Uint8Array>;
+  /** M07-only bounded native read; returns at most maxBytes plus one sentinel byte. */
+  readBinaryBounded?(path: string, maxBytes: number): Promise<Uint8Array>;
   createFolder(path: string): Promise<void>;
   create(path: string, content: string): Promise<void>;
+}
+
+/** Drop all mutation and lookup methods before handing I/O to M07 catalog observation. */
+export function createCatalogReadIO(io: SourceVaultIO): CatalogVaultReadIO {
+  return {
+    configDir: io.configDir,
+    basePath: io.basePath,
+    list: io.list.bind(io),
+    readBinary: io.readBinary.bind(io),
+    ...(io.readBinaryBounded === undefined
+      ? {}
+      : { readBinaryBounded: io.readBinaryBounded.bind(io) }),
+  };
 }
 
 export function createObsidianSourceVaultIO(app: App): SourceVaultIO {
@@ -139,6 +156,8 @@ export function createObsidianSourceVaultIO(app: App): SourceVaultIO {
       return undefined;
     },
     readBinary: async (path) => new Uint8Array(await adapter.readBinary(path)),
+    readBinaryBounded: async (path, maxBytes) =>
+      readNativeVaultFileBounded(basePath, path, maxBytes),
     createFolder: async (path) => {
       await app.vault.createFolder(path);
     },

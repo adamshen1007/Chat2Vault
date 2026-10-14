@@ -10,3 +10,5 @@ apps/obsidian-plugin/worker.js
 .superpowers/sdd
 docs/evidence/m06-runtime-minimum.json
 docs/evidence/m06-runtime-stable.json
+docs/evidence/m07-runtime-minimum.json
+docs/evidence/m07-runtime-stable.json

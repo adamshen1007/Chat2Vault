@@ -166,7 +166,7 @@ describe("M05/M06 runtime artifact comparator", () => {
     ).toBe(true);
   });
 
-  it("accepts only the exact five approved runtime seams", async () => {
+  it("accepts only the exact seven approved M05-M07 runtime seams", async () => {
     const shared = {
       "src/main.ts": "export const main = 1;",
       "src/provider-transport.ts": "export const transport = 1;",
@@ -183,6 +183,8 @@ describe("M05/M06 runtime artifact comparator", () => {
         "src/runtime-test-keychain.ts": "export {};",
         "src/runtime-test-m06.ts": "export {};",
         "src/runtime-test-mutation-ledger.ts": "export {};",
+        "src/runtime-test-m07.ts": "export {};",
+        "src/runtime-test-m07-ledger.ts": "export {};",
       },
       { "src/main.ts": 8, "src/provider-transport.ts": 11 },
     );
@@ -193,5 +195,38 @@ describe("M05/M06 runtime artifact comparator", () => {
     expect(result.ok).toBe(true);
     expect(result.providerTransport.sha256).toMatch(/^[0-9a-f]{64}$/u);
     expect(result.providerTransport.bytesInOutput).toBe(11);
+  });
+
+  it("rejects an arbitrary eighth runtime-only input", async () => {
+    const shared = {
+      "src/main.ts": "export const main = 1;",
+      "src/provider-transport.ts": "export const transport = 1;",
+    };
+    const production = await record(shared, {
+      "src/main.ts": 8,
+      "src/provider-transport.ts": 11,
+    });
+    const runtime = await record(
+      {
+        ...shared,
+        "src/runtime-test-entry.ts": "export {};",
+        "src/runtime-test-network-seam.ts": "export {};",
+        "src/runtime-test-keychain.ts": "export {};",
+        "src/runtime-test-m06.ts": "export {};",
+        "src/runtime-test-mutation-ledger.ts": "export {};",
+        "src/runtime-test-m07.ts": "export {};",
+        "src/runtime-test-m07-ledger.ts": "export {};",
+        "src/runtime-test-unapproved.ts": "export {};",
+      },
+      { "src/main.ts": 8, "src/provider-transport.ts": 11 },
+    );
+    const result = (await comparator()).compareM05RuntimeArtifacts(
+      production,
+      runtime,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain(
+      "unexpected runtime-only input src/runtime-test-unapproved.ts",
+    );
   });
 });

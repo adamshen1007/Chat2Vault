@@ -44,10 +44,13 @@ import { sendOpenAICompatibleRequest } from "./provider-transport.js";
 import type { ProviderInvalidationReason } from "./provider-controller.js";
 import { Chat2VaultView, VIEW_TYPE } from "./view.js";
 import {
+  createCatalogReadIO,
   createObsidianSourceVaultIO,
   ObsidianSourceMutationAdapter,
 } from "./source-vault-adapter.js";
 import { ObsidianKnowledgeVaultAdapter } from "./knowledge-vault-adapter.js";
+import { ObsidianKnowledgeCatalogAdapter } from "./knowledge-catalog-adapter.js";
+import { observeKnowledgeCatalog } from "./catalog-observer.js";
 
 export function resolveNativePluginDirectory(
   configuredPluginDir: unknown,
@@ -161,6 +164,7 @@ export default class Chat2VaultPlugin extends Plugin {
     const controller = this.controller;
     this.registerView(VIEW_TYPE, (leaf) => {
       const knowledgeAdapter = this.createKnowledgeAdapter();
+      const knowledgeCatalog = this.createKnowledgeCatalogAdapter();
       return new Chat2VaultView(
         leaf,
         controller,
@@ -229,6 +233,9 @@ export default class Chat2VaultPlugin extends Plugin {
           knowledgeWriterPlatformEligible: () =>
             sourceWriterPlatformEligible(process.platform, process.arch),
           adapter: knowledgeAdapter,
+          catalog: knowledgeCatalog,
+          openKnowledgeNote: (path) =>
+            this.app.workspace.openLinkText(path, "", false),
           registerInvalidator: (invalidator) => {
             this.knowledgeInvalidators.add(invalidator);
             return () => this.knowledgeInvalidators.delete(invalidator);
@@ -526,6 +533,44 @@ export default class Chat2VaultPlugin extends Plugin {
         this.settings.knowledgeRoot,
       process.platform,
       process.arch,
+    );
+  }
+
+  private createKnowledgeCatalogAdapter(): ObsidianKnowledgeCatalogAdapter {
+    const io = createObsidianSourceVaultIO(this.app);
+    const readIO = createCatalogReadIO(io);
+    const pluginDir = resolveNativePluginDirectory(
+      this.manifest.dir,
+      this.app.vault.configDir,
+      this.manifest.id,
+    );
+    const nativeConfigured =
+      io.basePath !== "" &&
+      isM03WellFormedString(io.basePath) &&
+      pluginDir !== undefined &&
+      configureNativeObserver(
+        join(
+          io.basePath,
+          ...pluginDir.split("/"),
+          "native",
+          "source_observer.node",
+        ),
+      );
+    return new ObsidianKnowledgeCatalogAdapter(() =>
+      observeKnowledgeCatalog(
+        readIO,
+        readIO.basePath === "" || !nativeConfigured
+          ? undefined
+          : createDesktopNativeAdapter(),
+        () =>
+          this.settingsController?.settings.sourceRoot ??
+          this.settings.sourceRoot,
+        () =>
+          this.settingsController?.settings.knowledgeRoot ??
+          this.settings.knowledgeRoot,
+        process.platform,
+        process.arch,
+      ),
     );
   }
 }

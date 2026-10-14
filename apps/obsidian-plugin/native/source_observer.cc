@@ -1,11 +1,16 @@
 #include <node_api.h>
 
 #include <cstdint>
+#include <cmath>
+#include <new>
 #include <string>
 #include <vector>
 
 #if defined(__APPLE__)
 #include <sys/attr.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <cerrno>
 #include <unistd.h>
 #elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -86,6 +91,199 @@ bool Utf8Argument(napi_env env, napi_callback_info info, std::string* output) {
 }
 
 #if defined(__APPLE__)
+bool SameIdentity(const struct stat& left, const struct stat& right) {
+  return left.st_dev == right.st_dev && left.st_ino == right.st_ino &&
+         left.st_size == right.st_size &&
+         left.st_mtimespec.tv_sec == right.st_mtimespec.tv_sec &&
+         left.st_mtimespec.tv_nsec == right.st_mtimespec.tv_nsec &&
+         left.st_ctimespec.tv_sec == right.st_ctimespec.tv_sec &&
+         left.st_ctimespec.tv_nsec == right.st_ctimespec.tv_nsec;
+}
+
+bool SafeRelativePath(const std::string& path, std::vector<std::string>* parts) {
+  if (path.empty() || path.front() == '/' || path.find('\\') != std::string::npos) return false;
+  size_t start = 0;
+  while (start < path.size()) {
+    const size_t end = path.find('/', start);
+    const std::string part = path.substr(start, end == std::string::npos ? end : end - start);
+    if (part.empty() || part == "." || part == "..") return false;
+    parts->push_back(part);
+    if (end == std::string::npos) return true;
+    start = end + 1;
+  }
+  return false;
+}
+
+// Walk from a held vault-root descriptor; no path component may be a symlink.
+int OpenContainedFile(int root, const std::vector<std::string>& parts) {
+  int parent = dup(root);
+  if (parent < 0) return -1;
+  for (size_t index = 0; index < parts.size(); ++index) {
+    const bool leaf = index + 1 == parts.size();
+    const int next = openat(parent, parts[index].c_str(),
+                            O_RDONLY | O_NOFOLLOW | O_CLOEXEC | (leaf ? O_NONBLOCK : O_DIRECTORY));
+    close(parent);
+    if (next < 0) return -1;
+    parent = next;
+  }
+  return parent;
+}
+
+bool LstatContainedFile(int root, const std::vector<std::string>& parts, struct stat* result) {
+  int parent = dup(root);
+  if (parent < 0) return false;
+  for (size_t index = 0; index + 1 < parts.size(); ++index) {
+    const int next = openat(parent, parts[index].c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    close(parent);
+    if (next < 0) return false;
+    parent = next;
+  }
+  const bool success = fstatat(parent, parts.back().c_str(), result, AT_SYMLINK_NOFOLLOW) == 0;
+  close(parent);
+  return success;
+}
+
+struct BoundedReadWork {
+  napi_async_work handle = nullptr;
+  napi_deferred deferred = nullptr;
+  std::string root_path;
+  std::string relative_path;
+  std::vector<std::string> parts;
+  size_t limit = 0;
+  std::vector<uint8_t> bytes;
+  size_t size = 0;
+  bool safe = false;
+};
+
+// N-API calls stay on the main thread. The complete filesystem transaction runs here.
+void ExecuteBoundedRead(napi_env, void* data) {
+  auto* work = static_cast<BoundedReadWork*>(data);
+  const int root = open(work->root_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (root < 0) return;
+  struct stat root_before{}, root_after{}, path_before{}, path_after{}, fd_before{}, fd_after{};
+  bool safe = fstat(root, &root_before) == 0 && S_ISDIR(root_before.st_mode);
+  int file = safe ? OpenContainedFile(root, work->parts) : -1;
+  safe = safe && file >= 0 && fstat(file, &fd_before) == 0 && S_ISREG(fd_before.st_mode) &&
+         LstatContainedFile(root, work->parts, &path_before) && S_ISREG(path_before.st_mode) &&
+         SameIdentity(fd_before, path_before);
+  if (safe) {
+    const int observed = OpenContainedFile(root, work->parts);
+    safe = observed >= 0 && fstat(observed, &path_before) == 0 && SameIdentity(fd_before, path_before);
+    if (observed >= 0) close(observed);
+  }
+  size_t offset = 0;
+  if (safe) {
+    try {
+      work->bytes.resize(work->limit);
+    } catch (...) {
+      safe = false;
+    }
+  }
+  while (safe && offset < work->limit) {
+    const ssize_t count = pread(file, work->bytes.data() + offset, work->limit - offset, static_cast<off_t>(offset));
+    if (count < 0 && errno == EINTR) continue;
+    if (count < 0) safe = false;
+    if (count <= 0) break;
+    offset += static_cast<size_t>(count);
+  }
+  if (safe) {
+    const int observed = OpenContainedFile(root, work->parts);
+    const int current_root = open(work->root_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    safe = observed >= 0 && current_root >= 0 &&
+           fstat(file, &fd_after) == 0 && fstat(observed, &path_after) == 0 &&
+           fstat(current_root, &root_after) == 0 &&
+           SameIdentity(root_before, root_after) && SameIdentity(fd_before, fd_after) &&
+           SameIdentity(fd_before, path_after);
+    struct stat lstat_after{};
+    safe = safe && LstatContainedFile(root, work->parts, &lstat_after) &&
+           S_ISREG(lstat_after.st_mode) && SameIdentity(fd_before, lstat_after);
+    if (observed >= 0) close(observed);
+    if (current_root >= 0) close(current_root);
+  }
+  if (file >= 0) close(file);
+  close(root);
+  work->safe = safe;
+  work->size = offset;
+}
+
+void CompleteBoundedRead(napi_env env, napi_status status, void* data) {
+  auto* work = static_cast<BoundedReadWork*>(data);
+  napi_value result = Kind(env, "unavailable");
+  if (status == napi_ok && work->safe) {
+    void* copied = nullptr;
+    napi_value buffer;
+    if (napi_create_buffer_copy(env, work->size, work->bytes.data(), &copied, &buffer) == napi_ok)
+      result = buffer;
+  }
+  napi_resolve_deferred(env, work->deferred, result);
+  napi_delete_async_work(env, work->handle);
+  delete work;
+}
+
+bool ValidUtf16String(napi_env env, napi_value value, std::string* result) {
+  napi_valuetype type;
+  if (napi_typeof(env, value, &type) != napi_ok || type != napi_string) return false;
+  size_t length = 0;
+  if (napi_get_value_string_utf16(env, value, nullptr, 0, &length) != napi_ok || length > 4096) return false;
+  std::vector<char16_t> units(length + 1);
+  if (napi_get_value_string_utf16(env, value, units.data(), units.size(), &length) != napi_ok) return false;
+  for (size_t index = 0; index < length; ++index) {
+    const char16_t unit = units[index];
+    if (unit == 0) return false;
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      if (++index >= length || units[index] < 0xdc00 || units[index] > 0xdfff) return false;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) return false;
+  }
+  size_t bytes_length = 0;
+  if (napi_get_value_string_utf8(env, value, nullptr, 0, &bytes_length) != napi_ok) return false;
+  std::vector<char> bytes(bytes_length + 1);
+  if (napi_get_value_string_utf8(env, value, bytes.data(), bytes.size(), &bytes_length) != napi_ok) return false;
+  result->assign(bytes.data(), bytes_length);
+  return FatalUtf8(reinterpret_cast<const uint8_t*>(result->data()), result->size());
+}
+
+napi_value ReadVaultFileBounded(napi_env env, napi_callback_info info) {
+  napi_value promise;
+  napi_deferred deferred;
+  if (napi_create_promise(env, &deferred, &promise) != napi_ok) return Kind(env, "unavailable");
+  auto unavailable = [&]() -> napi_value {
+    napi_resolve_deferred(env, deferred, Kind(env, "unavailable"));
+    return promise;
+  };
+  size_t argc = 3;
+  napi_value argv[3];
+  if (napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr) != napi_ok || argc != 3) return unavailable();
+  auto* work = new (std::nothrow) BoundedReadWork();
+  if (work == nullptr) return unavailable();
+  work->deferred = deferred;
+  double max_double = -1;
+  napi_valuetype max_type;
+  if (!ValidUtf16String(env, argv[0], &work->root_path) ||
+      !ValidUtf16String(env, argv[1], &work->relative_path) ||
+      napi_typeof(env, argv[2], &max_type) != napi_ok || max_type != napi_number ||
+      napi_get_value_double(env, argv[2], &max_double) != napi_ok ||
+      !std::isfinite(max_double) || max_double < 0 || max_double > 128 * 1024 ||
+      std::trunc(max_double) != max_double ||
+      work->root_path.empty() || work->root_path.front() != '/' ||
+      !SafeRelativePath(work->relative_path, &work->parts)) {
+    delete work;
+    return unavailable();
+  }
+  work->limit = static_cast<size_t>(max_double) + 1;
+  napi_value resource_name = String(env, "Chat2Vault bounded vault read");
+  if (napi_create_async_work(env, nullptr, resource_name, ExecuteBoundedRead, CompleteBoundedRead,
+                             work, &work->handle) != napi_ok) {
+    delete work;
+    return unavailable();
+  }
+  if (napi_queue_async_work(env, work->handle) != napi_ok) {
+    napi_delete_async_work(env, work->handle);
+    delete work;
+    return unavailable();
+  }
+  return promise;
+}
+
 struct VolumeAttributes {
   uint32_t length;
   attribute_set_t returned;
@@ -147,6 +345,7 @@ napi_value ObserveMacOSMountPoint(napi_env env, napi_callback_info info) {
   return response;
 }
 #else
+napi_value ReadVaultFileBounded(napi_env env, napi_callback_info) { return Kind(env, "unavailable"); }
 napi_value ObserveMacOSMountPoint(napi_env env, napi_callback_info) { return Kind(env, "unavailable"); }
 #endif
 
@@ -171,8 +370,9 @@ napi_value Initialize(napi_env env, napi_value exports) {
   napi_property_descriptor descriptors[] = {
       {"observeMacOSMountPoint", nullptr, ObserveMacOSMountPoint, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"observeWindowsReparsePoint", nullptr, ObserveWindowsReparsePoint, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"readVaultFileBounded", nullptr, ReadVaultFileBounded, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
-  napi_define_properties(env, exports, 2, descriptors);
+  napi_define_properties(env, exports, 3, descriptors);
   return exports;
 }
 

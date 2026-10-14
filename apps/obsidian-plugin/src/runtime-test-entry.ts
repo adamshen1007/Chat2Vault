@@ -36,7 +36,12 @@ import { runRuntimeKeychainLifecycle } from "./runtime-test-keychain.js";
 import { createDesktopNativeAdapter } from "./containment.js";
 import { configureNativeObserver } from "./native-observer.js";
 import { ObsidianKnowledgeVaultAdapter } from "./knowledge-vault-adapter.js";
-import { createObsidianSourceVaultIO } from "./source-vault-adapter.js";
+import { ObsidianKnowledgeCatalogAdapter } from "./knowledge-catalog-adapter.js";
+import { observeKnowledgeCatalog } from "./catalog-observer.js";
+import {
+  createCatalogReadIO,
+  createObsidianSourceVaultIO,
+} from "./source-vault-adapter.js";
 import {
   prepareM06RuntimeVault,
   runM06RuntimeScenarios,
@@ -46,6 +51,16 @@ import {
   installM06MutationLedger,
   type M06MutationLedger,
 } from "./runtime-test-mutation-ledger.js";
+import {
+  M07_RUNTIME_PROTECTED_PATHS,
+  prepareM07RuntimeVault,
+  runM07RuntimeScenarios,
+  type M07RuntimeEvidence,
+} from "./runtime-test-m07.js";
+import {
+  installM07MutationLedger,
+  type M07MutationLedger,
+} from "./runtime-test-m07-ledger.js";
 
 export interface M05RuntimeInput {
   port: number;
@@ -112,6 +127,7 @@ export default class M05RuntimePlugin extends Plugin {
     ((reason: "settings" | "unload") => void) | undefined;
   private providerCalls = 0;
   private m06MutationLedger: M06MutationLedger | undefined;
+  private m07MutationLedger: M07MutationLedger | undefined;
   public override settings: Chat2VaultSettingsV4 = {
     schemaVersion: 4,
     installationId: "44444444-4444-4444-8444-444444444444",
@@ -158,6 +174,16 @@ export default class M05RuntimePlugin extends Plugin {
         () => this.settings.knowledgeRoot,
         process.platform,
         process.arch,
+      );
+      const knowledgeCatalog = new ObsidianKnowledgeCatalogAdapter(() =>
+        observeKnowledgeCatalog(
+          createCatalogReadIO(io),
+          nativeConfigured ? createDesktopNativeAdapter() : undefined,
+          () => this.settings.sourceRoot,
+          () => this.settings.knowledgeRoot,
+          process.platform,
+          process.arch,
+        ),
       );
       return new Chat2VaultView(
         leaf,
@@ -211,6 +237,7 @@ export default class M05RuntimePlugin extends Plugin {
           knowledgeWriterPlatformEligible: () =>
             sourceWriterPlatformEligible(process.platform, process.arch),
           adapter: knowledgeAdapter,
+          catalog: knowledgeCatalog,
           registerInvalidator: (invalidator) => {
             this.knowledgeInvalidator = invalidator;
             return () => {
@@ -236,6 +263,8 @@ export default class M05RuntimePlugin extends Plugin {
     this.stateObservers.clear();
     this.m06MutationLedger?.restore();
     this.m06MutationLedger = undefined;
+    this.m07MutationLedger?.restore();
+    this.m07MutationLedger = undefined;
   }
 
   public savePreviewMessagesPerPage(): Promise<{ status: "unchanged" }> {
@@ -335,6 +364,45 @@ export default class M05RuntimePlugin extends Plugin {
     ledger.setPhase("fixture-setup");
     try {
       await prepareM06RuntimeVault(this.app);
+    } finally {
+      ledger.setPhase("inactive");
+    }
+  }
+
+  public runM07RuntimeScenarios(): Promise<M07RuntimeEvidence> {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (!(view instanceof Chat2VaultView))
+      return Promise.reject(new Error("M07 runtime view unavailable"));
+    const ledger = this.m07MutationLedger;
+    if (ledger === undefined)
+      return Promise.reject(new Error("M07 mutation ledger unavailable"));
+    return runM07RuntimeScenarios(
+      this.app,
+      view,
+      () => this.providerCalls,
+      ledger,
+    ).finally(() => {
+      ledger.restore();
+      if (this.m07MutationLedger === ledger) this.m07MutationLedger = undefined;
+    });
+  }
+
+  public installM07MutationLedger(): void {
+    if (this.m07MutationLedger !== undefined)
+      throw new Error("M07 mutation ledger already installed");
+    this.m07MutationLedger = installM07MutationLedger(
+      this.app.vault,
+      M07_RUNTIME_PROTECTED_PATHS,
+    );
+  }
+
+  public async prepareM07RuntimeVault(): Promise<void> {
+    const ledger = this.m07MutationLedger;
+    if (ledger === undefined)
+      throw new Error("M07 mutation ledger unavailable");
+    ledger.setPhase("fixture-setup");
+    try {
+      await prepareM07RuntimeVault(this.app);
     } finally {
       ledger.setPhase("inactive");
     }

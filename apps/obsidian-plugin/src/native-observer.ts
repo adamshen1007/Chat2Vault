@@ -20,18 +20,25 @@ interface NativeResult {
 interface NativeObserver {
   observeMacOSMountPoint(path: string): NativeResult;
   observeWindowsReparsePoint(path: string): NativeResult;
+  readVaultFileBounded(
+    root: string,
+    path: string,
+    maxBytes: number,
+  ): Promise<unknown>;
 }
 
 let observer: NativeObserver | undefined;
 const loadNative = createRequire(__filename);
 
 export function configureNativeObserver(absolutePath: string): boolean {
+  observer = undefined;
   if (!isM03WellFormedString(absolutePath)) return false;
   try {
     const candidate = loadNative(absolutePath) as Partial<NativeObserver>;
     if (
       typeof candidate.observeMacOSMountPoint !== "function" ||
-      typeof candidate.observeWindowsReparsePoint !== "function"
+      typeof candidate.observeWindowsReparsePoint !== "function" ||
+      typeof candidate.readVaultFileBounded !== "function"
     )
       return false;
     observer = candidate as NativeObserver;
@@ -39,6 +46,42 @@ export function configureNativeObserver(absolutePath: string): boolean {
   } catch {
     observer = undefined;
     return false;
+  }
+}
+
+/** Native descriptor-relative read; an unavailable or malformed result is never a fallback. */
+export async function readNativeVaultFileBounded(
+  basePath: string,
+  path: string,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  if (
+    process.platform !== "darwin" ||
+    observer === undefined ||
+    !isM03WellFormedString(basePath) ||
+    !basePath.startsWith("/") ||
+    !isM03WellFormedString(path) ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path
+      .split("/")
+      .some((part) => part === "" || part === "." || part === "..") ||
+    !Number.isSafeInteger(maxBytes) ||
+    maxBytes < 0 ||
+    maxBytes > 128 * 1024
+  )
+    throw new Error("Bounded vault read unavailable");
+  try {
+    const result = await observer.readVaultFileBounded(
+      basePath,
+      path,
+      maxBytes,
+    );
+    if (!Buffer.isBuffer(result) || result.length > maxBytes + 1)
+      throw new Error("Bounded vault read unsafe");
+    return new Uint8Array(result);
+  } catch {
+    throw new Error("Bounded vault read unsafe");
   }
 }
 

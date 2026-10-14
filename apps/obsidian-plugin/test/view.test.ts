@@ -3,9 +3,11 @@
 import {
   buildDistillationRequest,
   fingerprint,
+  parseKnowledgeCatalogNote,
   validateDistillationResult,
   type CanonicalConversation,
   type CanonicalMessage,
+  type CatalogKnowledgeNote,
   type DistillationValidationResult,
   type ImportDiagnostic,
   type ImportResult,
@@ -219,12 +221,16 @@ async function openKnowledgeView(
   controller: ImportController;
   adapter: KnowledgeVaultAdapter;
   created: Map<string, Uint8Array>;
+  catalogNotes: CatalogKnowledgeNote[];
+  openedNotes: string[];
   invalidate: (reason: "settings" | "unload") => void;
 }> {
   const item = manualConversation();
   const built = buildDistillationRequest(item);
   if (!built.ok) throw new Error("Synthetic request failed");
   const created = new Map<string, Uint8Array>();
+  const catalogNotes: CatalogKnowledgeNote[] = [];
+  const openedNotes: string[] = [];
   let invalidator: ((reason: "settings" | "unload") => void) | undefined;
   let createCalls = 0;
   const adapter: KnowledgeVaultAdapter = {
@@ -273,6 +279,37 @@ async function openKnowledgeView(
     settingsGeneration: () => 1,
     knowledgeWriterPlatformEligible: () => true,
     adapter,
+    catalog: {
+      readKnowledgeCatalog: async () => {
+        const notes = [...created].flatMap(([path, bytes]) => {
+          const parsed = parseKnowledgeCatalogNote(path, bytes);
+          return parsed.status === "eligible" ? [parsed.note] : [];
+        });
+        notes.push(...catalogNotes);
+        return {
+          status: "ready" as const,
+          notes,
+          resolvedSources: [
+            {
+              provider: "chatgpt" as const,
+              providerConversationId: "synthetic-conversation",
+              conversationFingerprint: built.request.conversationFingerprint,
+              messageFingerprints: [],
+              sourceNotePath:
+                options.sourcePath ?? "Sources/synthetic-source.md",
+            },
+          ],
+          fingerprint: fingerprint({
+            created: [...created].map(([path, bytes]) => [path, [...bytes]]),
+            catalogNotes,
+          }),
+        };
+      },
+    },
+    openKnowledgeNote: (path) => {
+      openedNotes.push(path);
+      return Promise.resolve();
+    },
     registerInvalidator: (next) => {
       invalidator = next;
       return () => {
@@ -342,6 +379,8 @@ async function openKnowledgeView(
     controller,
     adapter,
     created,
+    catalogNotes,
+    openedNotes,
     invalidate: (reason) => invalidator?.(reason),
   };
 }
@@ -350,6 +389,71 @@ describe("preview view", () => {
   it("does not use innerHTML in the knowledge-review production view", () => {
     const source = readFileSync(resolve(process.cwd(), "src/view.ts"), "utf8");
     expect(source).not.toMatch(/\.innerHTML\b/u);
+  });
+
+  it("labels exact, same-source, and related catalog matches with open actions while only exact blocks write", async () => {
+    const { view, catalogNotes, openedNotes } = await openKnowledgeView();
+    const button = (label: string): HTMLButtonElement | undefined =>
+      Array.from(
+        view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((entry) => entry.textContent === label);
+    button("Accept")?.click();
+    view.contentEl
+      .querySelector<HTMLInputElement>(
+        '[aria-label^="Select knowledge candidate"]',
+      )
+      ?.click();
+    button("Dry run")?.click();
+    await flush();
+    const plan = view.contentEl.querySelector(".c2v-knowledge-plan-entry");
+    const path = plan
+      ?.querySelector("p")
+      ?.textContent.replace("Target path: ", "");
+    const markdown = plan?.querySelector("code")?.textContent;
+    if (path === undefined || markdown === undefined)
+      throw new Error("Missing exact dry-run");
+    const parsed = parseKnowledgeCatalogNote(
+      path,
+      new TextEncoder().encode(markdown),
+    );
+    if (parsed.status !== "eligible")
+      throw new Error("Invalid planned note fixture");
+    const note = parsed.note;
+    const exact = { ...note, path: "Knowledge/exact-aaaaaaaaaaaa.md" };
+    const sameSource = {
+      ...note,
+      path: "Knowledge/same-bbbbbbbbbbbb.md",
+      contentFingerprint: fingerprint("same-source"),
+    };
+    const related = {
+      ...note,
+      path: "Knowledge/related-cccccccccccc.md",
+      contentFingerprint: fingerprint("related"),
+      sourceNotes: [
+        {
+          provider: "chatgpt" as const,
+          conversationFingerprint: fingerprint("other-conversation"),
+          sourceNotePath: "Sources/other.md",
+        },
+      ],
+    };
+    catalogNotes.push(exact, sameSource, related);
+    button("Dry run")?.click();
+    await flush();
+    expect(view.contentEl.textContent).toContain("Exact duplicates");
+    expect(view.contentEl.textContent).toContain(
+      "Alternative extraction of unchanged source",
+    );
+    expect(view.contentEl.textContent).toContain("Related suggestions");
+    expect(button("Write")?.disabled).toBe(true);
+    for (const existing of [exact, sameSource, related])
+      button(`Open ${existing.path}`)?.click();
+    expect(openedNotes).toEqual([exact.path, sameSource.path, related.path]);
+    catalogNotes.shift();
+    button("Dry run")?.click();
+    await flush();
+    expect(button("Write")?.disabled).toBe(false);
+    await view.onClose();
   });
 
   it("renders labeled M06 decisions, bounded edits, and only eligible selection controls", async () => {
@@ -836,20 +940,15 @@ describe("preview view", () => {
       .find((button) => button.textContent === "Dry run")
       ?.click();
     await flush();
-    Array.from(
-      writable.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
-    )
-      .find((button) => button.textContent === "Write")
-      ?.click();
-    await flush();
+    expect(writable.view.contentEl.textContent).toContain(
+      "M07_EXACT_DUPLICATE",
+    );
     expect(
       Array.from(
-        writable.view.contentEl.querySelectorAll(".c2v-knowledge-ledger li"),
-      ).map((entry) => entry.textContent),
-    ).toEqual([
-      expect.stringContaining("identical-no-op"),
-      expect.stringContaining("identical-no-op"),
-    ]);
+        writable.view.contentEl.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent === "Write")?.disabled,
+    ).toBe(true);
+    expect(writable.created).toHaveLength(2);
     await writable.view.onClose();
 
     const partial = await openKnowledgeView({
@@ -1518,6 +1617,14 @@ describe("preview view", () => {
           settingsGeneration: () => 1,
           knowledgeWriterPlatformEligible: () => true,
           adapter: knowledgeAdapter,
+          catalog: {
+            readKnowledgeCatalog: async () => ({
+              status: "ready",
+              notes: [],
+              resolvedSources: [],
+              fingerprint: "synthetic-empty",
+            }),
+          },
           registerInvalidator: () => () => undefined,
         },
       );
