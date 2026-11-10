@@ -1,6 +1,7 @@
 import {
   parseChatGptExport,
   parseProviderResponse,
+  sha256,
   validateDistillationResult,
   type DistillationRequest,
   type M05ProviderConfig,
@@ -26,6 +27,7 @@ import {
   SettingsController,
   type Chat2VaultSettingsV4,
   type ProviderSettings,
+  type SettingsLoadResult,
 } from "./settings-model.js";
 import { Chat2VaultSettingTab } from "./settings.js";
 import {
@@ -61,6 +63,27 @@ import {
   installM07MutationLedger,
   type M07MutationLedger,
 } from "./runtime-test-m07-ledger.js";
+import {
+  prepareM08RuntimeVault,
+  runM08RuntimeScenarios,
+  type M08RuntimeEvidence,
+} from "./runtime-test-m08.js";
+import {
+  createObsidianCaptureVaultIO,
+  ObsidianCaptureVaultAdapter,
+  type CapturePlanInput,
+  type CaptureVaultIO,
+  type CaptureWritePlan,
+} from "./capture-vault-adapter.js";
+import type { CaptureController } from "./capture-controller.js";
+
+const runtimeEncoder = new TextEncoder();
+const m08ReconciliationState = {
+  writes: 0,
+  attempts: 0,
+  failures: 0,
+  failNextClear: false,
+};
 
 export interface M05RuntimeInput {
   port: number;
@@ -126,8 +149,10 @@ export default class M05RuntimePlugin extends Plugin {
   private knowledgeInvalidator:
     ((reason: "settings" | "unload") => void) | undefined;
   private providerCalls = 0;
+  private runtimeCaptureIo: CaptureVaultIO | undefined;
   private m06MutationLedger: M06MutationLedger | undefined;
   private m07MutationLedger: M07MutationLedger | undefined;
+  private runtimeSettingsController: SettingsController | undefined;
   public override settings: Chat2VaultSettingsV4 = {
     schemaVersion: 4,
     installationId: "44444444-4444-4444-8444-444444444444",
@@ -148,7 +173,44 @@ export default class M05RuntimePlugin extends Plugin {
   public providerDraft: ProviderSettings = { ...this.settings.provider };
   private readonly stateObservers = new Set<() => void>();
 
-  public override onload(): void {
+  private installRuntimeSettingsController(
+    loadedSettings: SettingsLoadResult,
+  ): void {
+    this.settings = { ...loadedSettings.settings };
+    this.runtimeSettingsController = new SettingsController(
+      loadedSettings,
+      async (settings) => {
+        if (settings.schemaVersion === 2)
+          throw new Error("M08 runtime settings regressed below v4");
+        m08ReconciliationState.attempts += 1;
+        if (
+          m08ReconciliationState.failNextClear &&
+          settings.schemaVersion === 5 &&
+          settings.captureReconciliation === null
+        ) {
+          m08ReconciliationState.failNextClear = false;
+          m08ReconciliationState.failures += 1;
+          throw new Error("synthetic reconciliation clear persistence failure");
+        }
+        this.settings = {
+          schemaVersion: 4,
+          installationId: settings.installationId,
+          previewMessagesPerPage: settings.previewMessagesPerPage,
+          sourceRoot: settings.sourceRoot,
+          knowledgeRoot: settings.knowledgeRoot,
+          provider: { ...settings.provider },
+        };
+        await this.saveData(settings);
+        m08ReconciliationState.writes += 1;
+      },
+      () => undefined,
+    );
+  }
+
+  public override async onload(): Promise<void> {
+    const persisted = await (this.loadData() as Promise<unknown>);
+    const loadedSettings = readSettings(persisted ?? this.settings);
+    this.installRuntimeSettingsController(loadedSettings);
     this.registerView(VIEW_TYPE, (leaf) => {
       const io = createObsidianSourceVaultIO(this.app);
       const pluginDirectory = resolveNativePluginDirectory(
@@ -184,6 +246,58 @@ export default class M05RuntimePlugin extends Plugin {
           process.platform,
           process.arch,
         ),
+      );
+      const captureIo = createObsidianCaptureVaultIO(this.app);
+      this.runtimeCaptureIo = captureIo;
+      const captureAdapter = new ObsidianCaptureVaultAdapter(
+        captureIo,
+        nativeConfigured ? createDesktopNativeAdapter() : undefined,
+        {
+          sourceRoot: () => this.settings.sourceRoot,
+          knowledgeRoot: () => this.settings.knowledgeRoot,
+          settingsPending: () => false,
+          platform: process.platform,
+          arch: process.arch,
+        },
+        {
+          current: () =>
+            this.runtimeSettingsController?.captureReconciliation ?? {
+              status: "failed",
+              code: "CAPTURE_RECONCILIATION_LOAD_FAILED",
+            },
+          prepare: (input) =>
+            this.runtimeSettingsController?.prepareCaptureReconciliation(
+              input,
+            ) ??
+            Promise.resolve({
+              status: "failed",
+              code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+            }),
+          markUncertain: (token, effect, candidate) =>
+            this.runtimeSettingsController?.markCaptureReconciliationUncertain(
+              token,
+              effect,
+              candidate,
+            ) ??
+            Promise.resolve({
+              status: "failed",
+              code: "CAPTURE_RECONCILIATION_UPDATE_FAILED",
+            }),
+          clearKnownOutcome: (token) =>
+            this.runtimeSettingsController?.clearKnownCaptureReconciliation(
+              token,
+            ) ??
+            Promise.resolve({
+              status: "failed",
+              code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+            }),
+          acknowledge: () =>
+            this.runtimeSettingsController?.acknowledgeCaptureReconciliation() ??
+            Promise.resolve({
+              status: "failed",
+              code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+            }),
+        },
       );
       return new Chat2VaultView(
         leaf,
@@ -246,6 +360,24 @@ export default class M05RuntimePlugin extends Plugin {
             };
           },
         },
+        {
+          currentActiveFile: () => {
+            const file = this.app.workspace.getActiveFile();
+            return file === null
+              ? undefined
+              : {
+                  path: file.path,
+                  identity: `${file.path}:${String(file.stat.mtime)}:${String(file.stat.size)}`,
+                };
+          },
+          sourceRoot: () => this.settings.sourceRoot,
+          sourceRootPending: () => false,
+          settingsGeneration: () =>
+            this.runtimeSettingsController?.sourceWriteGeneration ?? 0,
+          adapter: captureAdapter,
+          openCaptureSource: () => Promise.resolve(),
+          registerInvalidator: () => () => undefined,
+        },
       );
     });
     this.addCommand({
@@ -265,6 +397,8 @@ export default class M05RuntimePlugin extends Plugin {
     this.m06MutationLedger = undefined;
     this.m07MutationLedger?.restore();
     this.m07MutationLedger = undefined;
+    this.runtimeSettingsController = undefined;
+    this.runtimeCaptureIo = undefined;
   }
 
   public savePreviewMessagesPerPage(): Promise<{ status: "unchanged" }> {
@@ -407,6 +541,215 @@ export default class M05RuntimePlugin extends Plugin {
       ledger.setPhase("inactive");
     }
   }
+
+  public runM08RuntimeScenarios(): Promise<M08RuntimeEvidence> {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (!(view instanceof Chat2VaultView))
+      return Promise.reject(new Error("M08 runtime view unavailable"));
+    return runM08RuntimeScenarios(
+      this.app,
+      view,
+      () => this.providerCalls,
+      () => m08ReconciliationState.writes,
+      {
+        prepareOnly: (plan, input) =>
+          this.prepareM08Reconciliation(plan, input),
+        publishOnly: (plan) => this.publishM08WithoutClear(plan),
+        reloadSettings: () => this.reloadM08Settings(),
+        failNextClearPersistence: () => {
+          m08ReconciliationState.failNextClear = true;
+        },
+        persistenceCounts: () => ({
+          attempts: m08ReconciliationState.attempts,
+          successful: m08ReconciliationState.writes,
+          failed: m08ReconciliationState.failures,
+        }),
+      },
+    );
+  }
+
+  private async prepareM08Reconciliation(
+    plan: Exclude<CaptureWritePlan, { disposition: "blocked" }>,
+    input: CapturePlanInput,
+  ): Promise<void> {
+    const active = this.currentM08Plugin();
+    const prepared =
+      await active.runtimeSettingsController?.prepareCaptureReconciliation({
+        targetPathDigest: sha256(runtimeEncoder.encode(plan.targetPath)),
+        targetLocator: input.draft.fingerprint
+          .slice("sha256:".length)
+          .slice(0, 12),
+        sourceRootPathDigest: sha256(
+          runtimeEncoder.encode(plan.sourceRoot.logicalPath),
+        ),
+        sourceRootIdentity: { ...plan.sourceRoot.physicalIdentity },
+      });
+    if (prepared?.status !== "prepared")
+      throw new Error("M08 runtime reconciliation prepare failed");
+  }
+
+  private async publishM08WithoutClear(
+    plan: Exclude<CaptureWritePlan, { disposition: "blocked" }>,
+  ): Promise<void> {
+    const io = this.currentM08Plugin().runtimeCaptureIo;
+    if (io === undefined) throw new Error("M08 runtime capture IO unavailable");
+    const result = await io.publishExclusive({
+      parentPath: plan.sourceRoot.resolvedPath,
+      targetName: plan.targetPath.slice(plan.targetPath.lastIndexOf("/") + 1),
+      configPath: io.configDir,
+      bytes: runtimeEncoder.encode(plan.markdown),
+      vaultIdentity: plan.vaultIdentity,
+      parentIdentity: plan.sourceRoot.physicalIdentity,
+      configIdentity: plan.configIdentity,
+    });
+    if (result.kind !== "published")
+      throw new Error("M08 runtime publish-before-clear failed");
+  }
+
+  private async reloadM08Settings(): Promise<void> {
+    const active = this.currentM08Plugin();
+    const persisted = await (active.loadData() as Promise<unknown>);
+    active.installRuntimeSettingsController(readSettings(persisted));
+  }
+
+  private currentM08Plugin(): M05RuntimePlugin {
+    const active = (
+      this.app as unknown as {
+        plugins: { plugins: Record<string, unknown> };
+      }
+    ).plugins.plugins[this.manifest.id];
+    if (!(active instanceof M05RuntimePlugin))
+      throw new Error("M08 runtime plugin instance unavailable");
+    return active;
+  }
+
+  public prepareM08RuntimeVault(): Promise<void> {
+    m08ReconciliationState.writes = 0;
+    m08ReconciliationState.attempts = 0;
+    m08ReconciliationState.failures = 0;
+    m08ReconciliationState.failNextClear = false;
+    return prepareM08RuntimeVault(this.app);
+  }
+
+  public async prepareM08CrashProbe(
+    effect: "prepared" | "published",
+  ): Promise<{ targetPath: string; targetPresent: boolean; durable: true }> {
+    if (this.app.vault.getAbstractFileByPath("Sources") === null)
+      await this.app.vault.createFolder("Sources");
+    if (this.app.vault.getAbstractFileByPath("Knowledge") === null)
+      await this.app.vault.createFolder("Knowledge");
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (!(view instanceof Chat2VaultView))
+      throw new Error("M08 crash probe view unavailable");
+    const controller = (
+      view as unknown as { captureController?: CaptureController }
+    ).captureController;
+    if (controller === undefined)
+      throw new Error("M08 crash probe controller unavailable");
+    const preview = await controller.previewPaste(
+      `Synthetic ${effect} crash probe.`,
+      "https://chatgpt.com/c/11111111-1111-4111-8111-111111111111",
+    );
+    if (preview.status !== "ready")
+      throw new Error(
+        `M08 crash probe preview failed: ${preview.status}${"code" in preview ? `/${preview.code}` : ""}`,
+      );
+    await this.prepareM08Reconciliation(preview.plan, {
+      draft: preview.draft,
+      source: { kind: "manual", fingerprint: preview.draft.fingerprint },
+    });
+    if (effect === "published") await this.publishM08WithoutClear(preview.plan);
+    const persisted = readSettings(await (this.loadData() as Promise<unknown>));
+    if (persisted.captureReconciliation.status !== "unresolved")
+      throw new Error("M08 crash probe reconciliation was not durable");
+    return {
+      targetPath: preview.plan.targetPath,
+      targetPresent: await this.app.vault.adapter.exists(
+        preview.plan.targetPath,
+      ),
+      durable: true,
+    };
+  }
+
+  public async inspectM08CrashRecovery(targetPath: string): Promise<{
+    unresolvedAtLoad: boolean;
+    reloadBlocked: boolean;
+    blockedWriteDelta: number;
+    targetPresent: boolean;
+    providerCalls: number;
+  }> {
+    const unresolvedAtLoad =
+      this.runtimeSettingsController?.captureReconciliation.status ===
+      "unresolved";
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (!(view instanceof Chat2VaultView))
+      throw new Error("M08 crash recovery view unavailable");
+    const controller = (
+      view as unknown as { captureController?: CaptureController }
+    ).captureController;
+    if (controller === undefined)
+      throw new Error("M08 crash recovery controller unavailable");
+    const before = this.app.vault.getMarkdownFiles().length;
+    const blocked = await controller.previewPaste(
+      "Synthetic blocked crash retry.",
+      "https://chatgpt.com/c/11111111-1111-4111-8111-111111111111",
+    );
+    const after = this.app.vault.getMarkdownFiles().length;
+    return {
+      unresolvedAtLoad,
+      reloadBlocked:
+        blocked.status === "blocked" &&
+        blocked.code === "CAPTURE_RECONCILIATION_REQUIRED",
+      blockedWriteDelta: after - before,
+      targetPresent: await this.app.vault.adapter.exists(targetPath),
+      providerCalls: this.providerCalls,
+    };
+  }
+
+  public async prepareM08ClearFailureProbe(): Promise<{
+    targetPath: string;
+    targetPresent: boolean;
+    durable: true;
+    saveEffect: "published";
+  }> {
+    if (this.app.vault.getAbstractFileByPath("Sources") === null)
+      await this.app.vault.createFolder("Sources");
+    if (this.app.vault.getAbstractFileByPath("Knowledge") === null)
+      await this.app.vault.createFolder("Knowledge");
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+    if (!(view instanceof Chat2VaultView))
+      throw new Error("M08 clear-failure probe view unavailable");
+    const controller = (
+      view as unknown as { captureController?: CaptureController }
+    ).captureController;
+    if (controller === undefined)
+      throw new Error("M08 clear-failure probe controller unavailable");
+    const preview = await controller.previewPaste(
+      "Synthetic clear failure reload probe.",
+      "https://chatgpt.com/c/11111111-1111-4111-8111-111111111111",
+    );
+    if (preview.status !== "ready")
+      throw new Error("M08 clear-failure probe preview failed");
+    m08ReconciliationState.failNextClear = true;
+    const save = await controller.save();
+    if (
+      save.status !== "blocked" ||
+      !("effect" in save) ||
+      save.effect !== "published"
+    )
+      throw new Error("M08 clear-failure probe did not retain uncertainty");
+    const persisted = readSettings(await (this.loadData() as Promise<unknown>));
+    if (persisted.captureReconciliation.status !== "unresolved")
+      throw new Error("M08 clear-failure reconciliation was not durable");
+    return {
+      targetPath: preview.plan.targetPath,
+      targetPresent: await this.app.vault.adapter.exists(
+        preview.plan.targetPath,
+      ),
+      durable: true,
+      saveEffect: "published",
+    };
+  }
 }
 
 function config(port: number): M05ProviderConfig {
@@ -535,7 +878,7 @@ async function settingsRecoveryMutexIdentityScenario(): Promise<{
     "identity persistence fulfillment",
   );
   const future = readSettings({
-    schemaVersion: 5,
+    schemaVersion: 6,
     previewMessagesPerPage: 10,
     sourceRoot: "Future",
   });
@@ -692,10 +1035,10 @@ async function settingsRecoveryMutexIdentityScenario(): Promise<{
   );
   runtimeAssertion(
     (await futureController.savePreviewMessagesPerPage(50)).status ===
-      "saved" &&
-      (futureWrites[0] as { schemaVersion?: unknown }).schemaVersion === 2 &&
+      "failed" &&
+      futureWrites.length === 0 &&
       futureController.identityState === "unsupported-future",
-    "future schema permits only explicit frozen-M03 v2 write",
+    "future schema remains write-blocked",
   );
   const providerGenerations = rebased.captureProviderGenerations();
   const invalidProvider = await rebased.saveProviderSettings({

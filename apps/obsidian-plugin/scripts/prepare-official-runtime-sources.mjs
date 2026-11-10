@@ -68,6 +68,7 @@ export async function prepareOfficialRuntimeSources(directory) {
       "attach",
       "-readonly",
       "-nobrowse",
+      "-noautoopen",
       "-mountpoint",
       mount,
       minimumDmg,
@@ -75,7 +76,7 @@ export async function prepareOfficialRuntimeSources(directory) {
     attached = true;
     await run("/usr/bin/ditto", [join(mount, "Obsidian.app"), minimumApp]);
   } finally {
-    if (attached) await run("hdiutil", ["detach", mount]);
+    if (attached) await run("hdiutil", ["detach", "-force", mount]);
   }
 
   const metadataResponse = await fetch(STABLE_METADATA_URL, {

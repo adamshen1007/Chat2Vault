@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "0.1.0",
+  "name": "Chat2Vault ChatGPT capture (M08 candidate)",
+  "behavior": "create",
+  "noteContentFormat": "---\nchat2vault_capture: 1\ncapture_method: \"obsidian-web-clipper\"\ncapture_scope: \"visible-page-unverified\"\nsource_provider: \"chatgpt\"\nsource_url: \"{{url}}\"\n---\n{{content}}",
+  "properties": [],
+  "triggers": [
+    "/^https:\\/\\/chatgpt\\.com\\/c\\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:[?#].*)?$/"
+  ],
+  "noteNameFormat": "Chat2Vault-{{title|safe_name}}-{{time|date:\"YYYYMMDD-HHmmssSSS\"}}",
+  "path": "Chat2Vault-M08-Staging"
+}

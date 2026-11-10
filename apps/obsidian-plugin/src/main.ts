@@ -1,4 +1,4 @@
-import { Plugin } from "obsidian";
+import { Plugin, type App } from "obsidian";
 import { isAbsolute, join, normalize } from "node:path";
 import {
   isM03WellFormedString,
@@ -51,6 +51,11 @@ import {
 import { ObsidianKnowledgeVaultAdapter } from "./knowledge-vault-adapter.js";
 import { ObsidianKnowledgeCatalogAdapter } from "./knowledge-catalog-adapter.js";
 import { observeKnowledgeCatalog } from "./catalog-observer.js";
+import {
+  createObsidianCaptureVaultIO,
+  ObsidianCaptureVaultAdapter,
+} from "./capture-vault-adapter.js";
+import type { CaptureActiveFileAuthority } from "./capture-controller.js";
 
 export function resolveNativePluginDirectory(
   configuredPluginDir: unknown,
@@ -121,6 +126,11 @@ export default class Chat2VaultPlugin extends Plugin {
   private readonly knowledgeInvalidators = new Set<
     (reason: "settings" | "unload") => void
   >();
+  private readonly captureInvalidators = new Set<
+    (
+      reason: "settings" | "unload" | "active-file-edit" | "active-file-switch",
+    ) => void
+  >();
   private providerCredentialState:
     "unknown" | "configured" | "missing" | "unavailable" = "unknown";
   private pluginGeneration = 0;
@@ -141,6 +151,8 @@ export default class Chat2VaultPlugin extends Plugin {
           invalidate("settings");
         for (const invalidate of this.knowledgeInvalidators)
           invalidate("settings");
+        for (const invalidate of this.captureInvalidators)
+          invalidate("settings");
       },
       {
         onIdentityAuthorized: (installationId) => {
@@ -154,9 +166,12 @@ export default class Chat2VaultPlugin extends Plugin {
           }
         },
         invalidateKnowledgeState: () => {
-          if (this.isCurrentLoad(loadGeneration))
+          if (this.isCurrentLoad(loadGeneration)) {
             for (const invalidate of this.knowledgeInvalidators)
               invalidate("settings");
+            for (const invalidate of this.captureInvalidators)
+              invalidate("settings");
+          }
         },
       },
     );
@@ -165,6 +180,7 @@ export default class Chat2VaultPlugin extends Plugin {
     this.registerView(VIEW_TYPE, (leaf) => {
       const knowledgeAdapter = this.createKnowledgeAdapter();
       const knowledgeCatalog = this.createKnowledgeCatalogAdapter();
+      const captureAdapter = this.createCaptureAdapter();
       return new Chat2VaultView(
         leaf,
         controller,
@@ -241,6 +257,24 @@ export default class Chat2VaultPlugin extends Plugin {
             return () => this.knowledgeInvalidators.delete(invalidator);
           },
         },
+        {
+          currentActiveFile: () => this.captureActiveFile(),
+          sourceRoot: () =>
+            this.settingsController?.settings.sourceRoot ??
+            this.settings.sourceRoot,
+          sourceRootPending: () =>
+            this.settingsController?.sourceRootPersistenceState.status ===
+            "pending",
+          settingsGeneration: () =>
+            this.settingsController?.sourceWriteGeneration ?? 0,
+          adapter: captureAdapter,
+          openCaptureSource: (path) =>
+            this.app.workspace.openLinkText(path, "", false),
+          registerInvalidator: (invalidator) => {
+            this.captureInvalidators.add(invalidator);
+            return () => this.captureInvalidators.delete(invalidator);
+          },
+        },
       );
     });
     this.addCommand({
@@ -250,6 +284,14 @@ export default class Chat2VaultPlugin extends Plugin {
         void this.openImporter();
       },
     });
+    this.addCommand({
+      id: "preview-chatgpt-capture",
+      name: "Preview ChatGPT capture",
+      callback: () => {
+        void this.openCapturePreview();
+      },
+    });
+    this.registerCaptureLifecycleEvents();
     this.addSettingTab(new Chat2VaultSettingTab(this.app, this));
     if (loaded.identityState === "authoritative")
       this.initializeProviderIdentity(
@@ -281,6 +323,8 @@ export default class Chat2VaultPlugin extends Plugin {
     this.providerStateObservers.clear();
     for (const invalidate of this.knowledgeInvalidators) invalidate("unload");
     this.knowledgeInvalidators.clear();
+    for (const invalidate of this.captureInvalidators) invalidate("unload");
+    this.captureInvalidators.clear();
     this.settingsController?.discardUnpersistedIdentityOnUnload();
     this.controller?.close();
   }
@@ -370,6 +414,75 @@ export default class Chat2VaultPlugin extends Plugin {
     }
     await this.app.workspace.revealLeaf(leaf);
     if (leaf.view instanceof Chat2VaultView) leaf.view.focusImport();
+  }
+  private async openCapturePreview(): Promise<void> {
+    const authority = this.captureActiveFile();
+    let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+    if (leaf === undefined) {
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE, active: true });
+    }
+    await this.app.workspace.revealLeaf(leaf);
+    if (leaf.view instanceof Chat2VaultView)
+      leaf.view.previewActiveCapture(authority);
+  }
+  private captureActiveFile(): CaptureActiveFileAuthority | undefined {
+    const workspace = (
+      this.app as unknown as {
+        workspace?: {
+          getActiveFile?(): {
+            path: string;
+            stat: { ctime: number; mtime: number; size: number };
+          } | null;
+        };
+      }
+    ).workspace;
+    const file = workspace?.getActiveFile?.();
+    if (!file?.path.endsWith(".md")) return undefined;
+    return {
+      path: file.path,
+      identity: `${String(file.stat.ctime)}:${String(file.stat.mtime)}:${String(file.stat.size)}`,
+    };
+  }
+  private registerCaptureLifecycleEvents(): void {
+    const app = (this as unknown as { app?: App }).app;
+    if (app === undefined) return;
+    const workspaceValue: unknown = (app as unknown as { workspace?: unknown })
+      .workspace;
+    if (
+      workspaceValue !== null &&
+      typeof workspaceValue === "object" &&
+      typeof (workspaceValue as Record<string, unknown>).on === "function"
+    ) {
+      const workspace = workspaceValue as App["workspace"];
+      this.registerEvent(
+        workspace.on("active-leaf-change", () => {
+          for (const invalidate of this.captureInvalidators)
+            invalidate("active-file-switch");
+        }),
+      );
+      this.registerEvent(
+        workspace.on("file-open", () => {
+          for (const invalidate of this.captureInvalidators)
+            invalidate("active-file-switch");
+        }),
+      );
+    }
+    const vaultValue: unknown = (app as unknown as { vault?: unknown }).vault;
+    if (
+      vaultValue !== null &&
+      typeof vaultValue === "object" &&
+      typeof (vaultValue as Record<string, unknown>).on === "function"
+    ) {
+      const vault = vaultValue as App["vault"];
+      this.registerEvent(
+        vault.on("modify", (file) => {
+          if (!file.path.endsWith(".md")) return;
+          for (const invalidate of this.captureInvalidators)
+            invalidate("active-file-edit");
+        }),
+      );
+    }
   }
   private initializeProviderIdentity(
     installationId: string,
@@ -533,6 +646,83 @@ export default class Chat2VaultPlugin extends Plugin {
         this.settings.knowledgeRoot,
       process.platform,
       process.arch,
+    );
+  }
+
+  private createCaptureAdapter(): ObsidianCaptureVaultAdapter {
+    const io = createObsidianCaptureVaultIO(this.app);
+    const pluginDir = resolveNativePluginDirectory(
+      this.manifest.dir,
+      this.app.vault.configDir,
+      this.manifest.id,
+    );
+    const nativeConfigured =
+      io.basePath !== "" &&
+      isM03WellFormedString(io.basePath) &&
+      pluginDir !== undefined &&
+      configureNativeObserver(
+        join(
+          io.basePath,
+          ...pluginDir.split("/"),
+          "native",
+          "source_observer.node",
+        ),
+      );
+    return new ObsidianCaptureVaultAdapter(
+      io,
+      io.basePath === "" || !nativeConfigured
+        ? undefined
+        : createDesktopNativeAdapter(),
+      {
+        sourceRoot: () =>
+          this.settingsController?.settings.sourceRoot ??
+          this.settings.sourceRoot,
+        knowledgeRoot: () =>
+          this.settingsController?.settings.knowledgeRoot ??
+          this.settings.knowledgeRoot,
+        settingsPending: () =>
+          this.settingsController?.sourceRootPersistenceState.status ===
+            "pending" ||
+          this.settingsController?.knowledgeRootPersistenceState.status ===
+            "pending",
+        platform: process.platform,
+        arch: process.arch,
+      },
+      {
+        current: () =>
+          this.settingsController?.captureReconciliation ?? {
+            status: "failed" as const,
+            code: "CAPTURE_RECONCILIATION_LOAD_FAILED" as const,
+          },
+        prepare: (input) =>
+          this.settingsController?.prepareCaptureReconciliation(input) ??
+          Promise.resolve({
+            status: "failed" as const,
+            code: "CAPTURE_RECONCILIATION_PREPARE_FAILED" as const,
+          }),
+        markUncertain: (token, effect, candidate) =>
+          this.settingsController?.markCaptureReconciliationUncertain(
+            token,
+            effect,
+            candidate,
+          ) ??
+          Promise.resolve({
+            status: "failed" as const,
+            code: "CAPTURE_RECONCILIATION_UPDATE_FAILED" as const,
+          }),
+        clearKnownOutcome: (token) =>
+          this.settingsController?.clearKnownCaptureReconciliation(token) ??
+          Promise.resolve({
+            status: "failed" as const,
+            code: "CAPTURE_RECONCILIATION_CLEAR_FAILED" as const,
+          }),
+        acknowledge: () =>
+          this.settingsController?.acknowledgeCaptureReconciliation() ??
+          Promise.resolve({
+            status: "failed" as const,
+            code: "CAPTURE_RECONCILIATION_CLEAR_FAILED" as const,
+          }),
+      },
     );
   }
 

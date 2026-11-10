@@ -6,6 +6,10 @@ import {
 } from "../src/settings-model.js";
 
 const UUID = "123e4567-e89b-42d3-a456-426614174000";
+const TRANSACTION_UUID = "223e4567-e89b-42d3-a456-426614174000";
+const TARGET_DIGEST = `sha256:${"a".repeat(64)}`;
+const SOURCE_ROOT_DIGEST = `sha256:${"b".repeat(64)}`;
+const TARGET_LOCATOR = "0123456789ab";
 const provider = {
   endpoint: "https://example.test/v1/chat/completions",
   model: "synthetic-model",
@@ -29,6 +33,438 @@ const validV4 = {
 };
 
 describe("M05 settings v3", () => {
+  it("rejects non-canonical or out-of-range reconciliation filesystem identifiers", async () => {
+    const invalidIdentities = [
+      { device: "+1", inode: "2" },
+      { device: "01", inode: "2" },
+      { device: "18446744073709551616", inode: "2" },
+      { device: "1;echo injected", inode: "2" },
+      { device: "9".repeat(10_000), inode: "2" },
+      {
+        device: "1",
+        inode: "2",
+        capturedText: "must not persist",
+      },
+    ];
+    for (const sourceRootIdentity of invalidIdentities) {
+      const persisted = readSettings({
+        ...validV4,
+        schemaVersion: 5,
+        captureReconciliation: {
+          version: 1,
+          state: "prepared",
+          transactionId: TRANSACTION_UUID,
+          targetPathDigest: TARGET_DIGEST,
+          targetLocator: TARGET_LOCATOR,
+          sourceRootPathDigest: SOURCE_ROOT_DIGEST,
+          sourceRootIdentity,
+        },
+      });
+      expect(persisted.captureReconciliation).toEqual({
+        status: "failed",
+        code: "CAPTURE_RECONCILIATION_LOAD_FAILED",
+      });
+
+      const controller = new SettingsController(
+        readSettings(validV4),
+        () => Promise.resolve(),
+        () => undefined,
+        {},
+        () => TRANSACTION_UUID,
+      );
+      await expect(
+        controller.prepareCaptureReconciliation({
+          targetPathDigest: TARGET_DIGEST,
+          targetLocator: TARGET_LOCATOR,
+          sourceRootPathDigest: SOURCE_ROOT_DIGEST,
+          sourceRootIdentity,
+        }),
+      ).resolves.toEqual({
+        status: "failed",
+        code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+      });
+    }
+  });
+
+  it("rejects non-canonical temporary names and identities before uncertainty persistence", async () => {
+    const invalidCandidates = [
+      {
+        name: ".chat2vault-private-01",
+        ownership: "unverified" as const,
+      },
+      {
+        name: ".chat2vault-private-18446744073709551616",
+        ownership: "unverified" as const,
+      },
+      {
+        name: ".chat2vault-private-1;echo-injected",
+        ownership: "unverified" as const,
+      },
+      {
+        name: `.chat2vault-private-${"9".repeat(10_000)}`,
+        ownership: "unverified" as const,
+      },
+      {
+        name: ".chat2vault-private-42",
+        ownership: "unverified" as const,
+        identity: { device: "1", inode: "01" },
+      },
+      {
+        name: ".chat2vault-private-42",
+        ownership: "unverified" as const,
+        sourceUrl: "https://example.invalid/private",
+      },
+      {
+        name: ".chat2vault-private-42",
+        ownership: "unverified" as const,
+        identity: {
+          device: "1",
+          inode: "2",
+          diagnostic: "must not persist",
+        },
+      },
+    ];
+    for (const candidate of invalidCandidates) {
+      const controller = new SettingsController(
+        readSettings(validV4),
+        () => Promise.resolve(),
+        () => undefined,
+        {},
+        () => TRANSACTION_UUID,
+      );
+      const prepared = await controller.prepareCaptureReconciliation({
+        targetPathDigest: TARGET_DIGEST,
+        targetLocator: TARGET_LOCATOR,
+        sourceRootPathDigest: SOURCE_ROOT_DIGEST,
+        sourceRootIdentity: { device: "1", inode: "2" },
+      });
+      if (prepared.status !== "prepared") throw new Error("expected token");
+      await expect(
+        controller.markCaptureReconciliationUncertain(
+          prepared.token,
+          "temporary",
+          candidate,
+        ),
+      ).resolves.toEqual({
+        status: "failed",
+        code: "CAPTURE_RECONCILIATION_UPDATE_FAILED",
+      });
+    }
+  });
+
+  it("projects reconciliation inputs into detached exact content-free records", async () => {
+    const writes: unknown[] = [];
+    const controller = new SettingsController(
+      readSettings(validV4),
+      (value) => {
+        writes.push(structuredClone(value));
+        return Promise.resolve();
+      },
+      () => undefined,
+      {},
+      () => TRANSACTION_UUID,
+    );
+    const sourceRootIdentity = { device: "1", inode: "2" };
+    const prepared = await controller.prepareCaptureReconciliation({
+      targetPathDigest: TARGET_DIGEST,
+      targetLocator: TARGET_LOCATOR,
+      sourceRootPathDigest: SOURCE_ROOT_DIGEST,
+      sourceRootIdentity,
+    });
+    if (prepared.status !== "prepared") throw new Error("expected token");
+    sourceRootIdentity.device = "99";
+    expect(controller.captureReconciliation).toMatchObject({
+      status: "unresolved",
+      record: { sourceRootIdentity: { device: "1", inode: "2" } },
+    });
+
+    const candidate = {
+      name: ".chat2vault-private-42",
+      ownership: "unverified" as const,
+      identity: { device: "3", inode: "4" },
+    };
+    await expect(
+      controller.markCaptureReconciliationUncertain(
+        prepared.token,
+        "temporary",
+        candidate,
+      ),
+    ).resolves.toEqual({ status: "updated" });
+    candidate.name = ".chat2vault-private-77";
+    candidate.identity.device = "88";
+    expect(controller.captureReconciliation).toMatchObject({
+      status: "unresolved",
+      record: {
+        temporaryCandidate: {
+          name: ".chat2vault-private-42",
+          ownership: "unverified",
+          identity: { device: "3", inode: "4" },
+        },
+      },
+    });
+    const serialized = JSON.stringify(writes);
+    expect(serialized).not.toContain("must not persist");
+    expect(serialized).not.toContain("example.invalid");
+  });
+
+  it("loads a closed v5 content-free prepared record and preserves it through ordinary settings saves", async () => {
+    const prepared = {
+      version: 1 as const,
+      state: "prepared" as const,
+      transactionId: TRANSACTION_UUID,
+      targetPathDigest: TARGET_DIGEST,
+      targetLocator: TARGET_LOCATOR,
+      sourceRootPathDigest: SOURCE_ROOT_DIGEST,
+      sourceRootIdentity: { device: "1", inode: "2" },
+    };
+    const loaded = readSettings({
+      ...validV4,
+      schemaVersion: 5,
+      captureReconciliation: prepared,
+    });
+    expect(loaded.captureReconciliation).toEqual({
+      status: "unresolved",
+      record: prepared,
+    });
+    const writes: unknown[] = [];
+    const controller = new SettingsController(
+      loaded,
+      (value) => {
+        writes.push(structuredClone(value));
+        return Promise.resolve();
+      },
+      () => undefined,
+    );
+    await expect(controller.saveSourceRoot("Other")).resolves.toMatchObject({
+      status: "saved",
+    });
+    expect(writes).toEqual([
+      {
+        ...validV4,
+        schemaVersion: 5,
+        sourceRoot: "Other",
+        captureReconciliation: prepared,
+      },
+    ]);
+  });
+
+  it("persists a content-free write-ahead record and fails closed on prepare and clear errors", async () => {
+    const writes: unknown[] = [];
+    let reject = false;
+    const controller = new SettingsController(
+      readSettings(validV4),
+      (value) => {
+        writes.push(structuredClone(value));
+        return reject
+          ? Promise.reject(new Error("synthetic persistence failure"))
+          : Promise.resolve();
+      },
+      () => undefined,
+      {},
+      () => TRANSACTION_UUID,
+    );
+    const prepared = await controller.prepareCaptureReconciliation({
+      targetPathDigest: TARGET_DIGEST,
+      targetLocator: TARGET_LOCATOR,
+      sourceRootPathDigest: SOURCE_ROOT_DIGEST,
+      sourceRootIdentity: { device: "1", inode: "2" },
+    });
+    expect(prepared).toMatchObject({ status: "prepared" });
+    if (prepared.status !== "prepared") throw new Error("expected token");
+    expect(controller.captureReconciliation).toMatchObject({
+      status: "unresolved",
+      record: { state: "prepared", targetPathDigest: TARGET_DIGEST },
+    });
+    await expect(
+      controller.markCaptureReconciliationUncertain(
+        prepared.token,
+        "temporary",
+        {
+          name: ".chat2vault-private-42",
+          ownership: "unverified",
+          identity: { device: "1", inode: "77" },
+        },
+      ),
+    ).resolves.toEqual({ status: "updated" });
+    expect(readSettings(writes[1]).captureReconciliation).toMatchObject({
+      status: "unresolved",
+      record: {
+        state: "temporary-uncertain",
+        temporaryCandidate: {
+          name: ".chat2vault-private-42",
+          ownership: "unverified",
+          identity: { device: "1", inode: "77" },
+        },
+      },
+    });
+    const persisted = JSON.stringify(writes);
+    expect(persisted).not.toContain("Synthetic title");
+    expect(persisted).not.toContain("chatgpt.com");
+    expect(persisted).not.toContain("Synthetic visible text");
+    reject = true;
+    await expect(
+      controller.acknowledgeCaptureReconciliation(),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+    });
+    expect(controller.captureReconciliation.status).toBe("unresolved");
+
+    const failed = new SettingsController(
+      readSettings(validV4),
+      () => Promise.reject(new Error("synthetic prepare failure")),
+      () => undefined,
+      {},
+      () => TRANSACTION_UUID,
+    );
+    await expect(
+      failed.prepareCaptureReconciliation(TARGET_DIGEST),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+    });
+    expect(failed.captureReconciliation).toEqual({
+      status: "failed",
+      code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+    });
+  });
+
+  it("compare-and-sets one preparation and rejects stale transaction settlements", async () => {
+    let release!: () => void;
+    let writes = 0;
+    const controller = new SettingsController(
+      readSettings(validV4),
+      () => {
+        writes += 1;
+        return writes === 1
+          ? new Promise<void>((resolve) => {
+              release = resolve;
+            })
+          : Promise.resolve();
+      },
+      () => undefined,
+      {},
+      (() => {
+        const values = [TRANSACTION_UUID, UUID];
+        return () => values.shift() ?? UUID;
+      })(),
+    );
+    const input = {
+      targetPathDigest: TARGET_DIGEST,
+      targetLocator: TARGET_LOCATOR,
+      sourceRootPathDigest: SOURCE_ROOT_DIGEST,
+      sourceRootIdentity: { device: "1", inode: "2" },
+    };
+    const firstPending = controller.prepareCaptureReconciliation(input);
+    await Promise.resolve();
+    await expect(
+      controller.prepareCaptureReconciliation(input),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "CAPTURE_RECONCILIATION_REQUIRED",
+    });
+    release();
+    const first = await firstPending;
+    if (first.status !== "prepared") throw new Error("expected first token");
+    await expect(
+      controller.prepareCaptureReconciliation(input),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "CAPTURE_RECONCILIATION_REQUIRED",
+    });
+    await expect(
+      controller.clearKnownCaptureReconciliation(first.token),
+    ).resolves.toEqual({ status: "cleared" });
+    const second = await controller.prepareCaptureReconciliation(input);
+    if (second.status !== "prepared") throw new Error("expected second token");
+    await expect(
+      controller.markCaptureReconciliationUncertain(first.token, "published"),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "CAPTURE_RECONCILIATION_UPDATE_FAILED",
+    });
+    await expect(
+      controller.clearKnownCaptureReconciliation(first.token),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+    });
+    expect(controller.captureReconciliation).toMatchObject({
+      status: "unresolved",
+      record: { transactionId: UUID, state: "prepared" },
+    });
+  });
+
+  it("refuses acknowledgement while a prepared publication is active, then permits reconciliation after uncertainty", async () => {
+    const controller = new SettingsController(
+      readSettings(validV4),
+      () => Promise.resolve(),
+      () => undefined,
+      {},
+      () => TRANSACTION_UUID,
+    );
+    const prepared = await controller.prepareCaptureReconciliation({
+      targetPathDigest: TARGET_DIGEST,
+      targetLocator: TARGET_LOCATOR,
+      sourceRootPathDigest: SOURCE_ROOT_DIGEST,
+      sourceRootIdentity: { device: "1", inode: "2" },
+    });
+    if (prepared.status !== "prepared") throw new Error("expected token");
+    await expect(
+      controller.acknowledgeCaptureReconciliation(),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+    });
+    expect(controller.captureReconciliation).toMatchObject({
+      status: "unresolved",
+      record: { state: "prepared" },
+    });
+    await expect(
+      controller.markCaptureReconciliationUncertain(
+        prepared.token,
+        "published",
+      ),
+    ).resolves.toEqual({ status: "updated" });
+    await expect(
+      controller.acknowledgeCaptureReconciliation(),
+    ).resolves.toEqual({
+      status: "cleared",
+    });
+  });
+
+  it("loads malformed reconciliation data as a durable fail-closed state", async () => {
+    const loaded = readSettings({
+      ...validV4,
+      schemaVersion: 5,
+      captureReconciliation: {
+        version: 1,
+        state: "prepared",
+        transactionId: TRANSACTION_UUID,
+        targetPathDigest: "Sources/Private title.md",
+        targetLocator: TARGET_LOCATOR,
+        sourceRootPathDigest: SOURCE_ROOT_DIGEST,
+        sourceRootIdentity: { device: "1", inode: "2" },
+      },
+    });
+    expect(loaded.captureReconciliation).toEqual({
+      status: "failed",
+      code: "CAPTURE_RECONCILIATION_LOAD_FAILED",
+    });
+    const writes: unknown[] = [];
+    const controller = new SettingsController(
+      loaded,
+      (value) => {
+        writes.push(value);
+        return Promise.resolve();
+      },
+      () => undefined,
+    );
+    await expect(controller.saveSourceRoot("Other")).resolves.toMatchObject({
+      status: "failed",
+    });
+    expect(writes).toEqual([]);
+  });
   it("migrates each valid M03 family to one pending v3 identity", () => {
     for (const value of [
       undefined,
@@ -204,7 +640,7 @@ describe("M05 settings v3", () => {
       expect(readSettings(unsafe, () => UUID).identityState).toBe("pending");
     }
     const future = readSettings(
-      { schemaVersion: 5, opaque: { preserve: true } },
+      { schemaVersion: 6, opaque: { preserve: true } },
       () => {
         throw new Error("no UUID");
       },
@@ -229,12 +665,12 @@ describe("M05 settings v3", () => {
       status: "unavailable",
       code: "UNSUPPORTED_SETTINGS_SCHEMA",
     });
-    await expect(controller.savePreviewMessagesPerPage(50)).resolves.toEqual({
-      status: "saved",
+    await expect(
+      controller.savePreviewMessagesPerPage(50),
+    ).resolves.toMatchObject({
+      status: "failed",
     });
-    expect(writes).toEqual([
-      { schemaVersion: 2, previewMessagesPerPage: 50, sourceRoot: "" },
-    ]);
+    expect(writes).toEqual([]);
   });
 
   it("retains a failed pending UUID and provider basis, and Retry rebases M03 fields", async () => {
@@ -268,12 +704,13 @@ describe("M05 settings v3", () => {
       status: "saved",
     });
     expect(writes.at(-1)).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       installationId: UUID,
       previewMessagesPerPage: 25,
       sourceRoot: "Sources",
       knowledgeRoot: "",
       provider,
+      captureReconciliation: null,
     });
   });
 
@@ -308,12 +745,13 @@ describe("M05 settings v3", () => {
     release();
     await saving;
     expect(writes[0]).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       installationId: UUID,
       previewMessagesPerPage: 50,
       sourceRoot: "",
       knowledgeRoot: "",
       provider,
+      captureReconciliation: null,
     });
   });
 
@@ -879,7 +1317,7 @@ describe("M05 settings v3", () => {
     expect(uuidCalls).toBe(0);
     expect(writes).toEqual([]);
 
-    const futureBytes = JSON.stringify({ schemaVersion: 5, opaque: [1, 2] });
+    const futureBytes = JSON.stringify({ schemaVersion: 6, opaque: [1, 2] });
     const futureValue = JSON.parse(futureBytes) as unknown;
     const future = readSettings(futureValue, () => {
       throw new Error("future must not generate UUID");
@@ -904,10 +1342,7 @@ describe("M05 settings v3", () => {
     ).resolves.toMatchObject({
       status: "failed",
     });
-    expect(rejected).toEqual([
-      { schemaVersion: 2, previewMessagesPerPage: 50, sourceRoot: "" },
-      { schemaVersion: 2, previewMessagesPerPage: 25, sourceRoot: "Sources" },
-    ]);
+    expect(rejected).toEqual([]);
     expect(JSON.stringify(futureValue)).toBe(futureBytes);
     expect(futureController.identityState).toBe("unsupported-future");
   });
@@ -1177,8 +1612,8 @@ describe("M06 settings v4", () => {
     expect(uuidCalls).toBe(0);
   });
 
-  it("treats safe integer schema 5 and above as unsupported future settings", () => {
-    for (const schemaVersion of [5, Number.MAX_SAFE_INTEGER])
+  it("treats safe integer schema 6 and above as unsupported future settings", () => {
+    for (const schemaVersion of [6, Number.MAX_SAFE_INTEGER])
       expect(readSettings({ ...validV4, schemaVersion })).toMatchObject({
         identityState: "unsupported-future",
         providerReadiness: {
@@ -1260,7 +1695,9 @@ describe("M06 settings v4", () => {
     expect(writes).toEqual([
       {
         ...validV4,
+        schemaVersion: 5,
         knowledgeRoot: "Knowledge/Caf\u00e9",
+        captureReconciliation: null,
       },
     ]);
     expect(observations).toEqual([

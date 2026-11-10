@@ -1,10 +1,13 @@
 import { describe, expect, test } from "vitest";
 import {
   isChat2VaultLikeMalformed,
+  parseCaptureSource,
   parseSourceRegistryEntry,
   planSourceWrite,
+  renderCaptureSource,
   renderSourceNote,
   sourceWritePlanEqual,
+  validateCapture,
   type CanonicalConversation,
   type SourceDescriptor,
   type SourcePlannerInput,
@@ -40,6 +43,35 @@ function conversation(fingerprint = "c".repeat(64)): CanonicalConversation {
 }
 
 describe("M03 registry and planner", () => {
+  test("keeps valid M08 capture sources out of the malformed M03 export registry", () => {
+    const capture = validateCapture({
+      method: "manual-paste",
+      text: "Synthetic capture",
+    });
+    if (!capture.ok) throw new Error(capture.code);
+    const bytes = new TextEncoder().encode(renderCaptureSource(capture.draft));
+
+    expect(
+      parseSourceRegistryEntry(bytes, "Sources/capture.md"),
+    ).toBeUndefined();
+    expect(isChat2VaultLikeMalformed(bytes)).toBe(false);
+    expect(parseCaptureSource(bytes, "Sources/capture.md").ok).toBe(true);
+  });
+
+  test("continues to flag a malformed M03-like export note", () => {
+    const bytes = new TextEncoder().encode(`---
+type: "ai-conversation-source"
+knowledge_status: "source"
+source_content_fingerprint: "invalid"
+---
+`);
+
+    expect(
+      parseSourceRegistryEntry(bytes, "Sources/malformed.md"),
+    ).toBeUndefined();
+    expect(isChat2VaultLikeMalformed(bytes)).toBe(true);
+  });
+
   test("parses only the exact generated frontmatter byte subset", () => {
     const rendered = renderSourceNote({ source, conversation: conversation() });
     if (!rendered.ok) throw new Error(rendered.code);

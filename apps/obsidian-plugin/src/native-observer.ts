@@ -1,6 +1,11 @@
 import { realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { isM03WellFormedString } from "@chat2vault/core";
+import {
+  isCapturePhysicalIdentity,
+  isCaptureTemporaryName,
+  projectCapturePhysicalIdentity,
+} from "./capture-identifiers.js";
 import type {
   MacOSMountPointProbe,
   MacOSMountPointEvidence,
@@ -25,7 +30,54 @@ interface NativeObserver {
     path: string,
     maxBytes: number,
   ): Promise<unknown>;
+  observeVaultIdentity(root: string, path: string): unknown;
+  publishVaultFileExclusive(
+    root: string,
+    parentPath: string,
+    targetName: string,
+    configPath: string,
+    bytes: Uint8Array,
+    rootDevice: string,
+    rootInode: string,
+    parentDevice: string,
+    parentInode: string,
+    configDevice: string,
+    configInode: string,
+  ): Promise<unknown>;
 }
+
+export interface NativeVaultIdentity {
+  device: string;
+  inode: string;
+}
+
+export interface NativeTemporaryArtifact {
+  path: string;
+  ownership: "unverified";
+  identity?: NativeVaultIdentity;
+}
+
+export interface NativeVaultPublishRequest {
+  basePath: string;
+  parentPath: string;
+  targetName: string;
+  configPath: string;
+  bytes: Uint8Array;
+  vaultIdentity: NativeVaultIdentity;
+  parentIdentity: NativeVaultIdentity;
+  configIdentity: NativeVaultIdentity;
+}
+
+export type NativeVaultPublishResult =
+  | { kind: "published" }
+  | { kind: "collision" }
+  | { kind: "failed" }
+  | { kind: "uncertain"; effect: "published" }
+  | {
+      kind: "uncertain";
+      effect: "temporary";
+      temporaryArtifact: NativeTemporaryArtifact;
+    };
 
 let observer: NativeObserver | undefined;
 const loadNative = createRequire(__filename);
@@ -38,7 +90,9 @@ export function configureNativeObserver(absolutePath: string): boolean {
     if (
       typeof candidate.observeMacOSMountPoint !== "function" ||
       typeof candidate.observeWindowsReparsePoint !== "function" ||
-      typeof candidate.readVaultFileBounded !== "function"
+      typeof candidate.readVaultFileBounded !== "function" ||
+      typeof candidate.observeVaultIdentity !== "function" ||
+      typeof candidate.publishVaultFileExclusive !== "function"
     )
       return false;
     observer = candidate as NativeObserver;
@@ -68,7 +122,7 @@ export async function readNativeVaultFileBounded(
       .some((part) => part === "" || part === "." || part === "..") ||
     !Number.isSafeInteger(maxBytes) ||
     maxBytes < 0 ||
-    maxBytes > 128 * 1024
+    maxBytes > 1_064_960
   )
     throw new Error("Bounded vault read unavailable");
   try {
@@ -82,6 +136,153 @@ export async function readNativeVaultFileBounded(
     return new Uint8Array(result);
   } catch {
     throw new Error("Bounded vault read unsafe");
+  }
+}
+
+function validRelativePath(path: string, allowEmpty = false): boolean {
+  return (
+    (allowEmpty ? typeof path === "string" : isM03WellFormedString(path)) &&
+    !path.startsWith("/") &&
+    !path.includes("\\") &&
+    (path === "" ||
+      !path
+        .split("/")
+        .some((part) => part === "" || part === "." || part === ".."))
+  );
+}
+
+function validIdentity(value: unknown): value is NativeVaultIdentity {
+  return isCapturePhysicalIdentity(value);
+}
+
+function temporaryArtifact(
+  value: unknown,
+  parentPath: string,
+): NativeTemporaryArtifact | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.path !== "string" ||
+    !validRelativePath(candidate.path) ||
+    candidate.ownership !== "unverified" ||
+    (candidate.identity !== undefined && !validIdentity(candidate.identity))
+  )
+    return undefined;
+  const prefix = `${parentPath}/`;
+  if (!candidate.path.startsWith(prefix)) return undefined;
+  const name = candidate.path.slice(prefix.length);
+  if (!isCaptureTemporaryName(name)) return undefined;
+  const identity =
+    candidate.identity === undefined
+      ? undefined
+      : projectCapturePhysicalIdentity(candidate.identity);
+  if (candidate.identity !== undefined && identity === undefined)
+    return undefined;
+  return {
+    path: candidate.path,
+    ownership: "unverified",
+    ...(identity === undefined ? {} : { identity }),
+  };
+}
+
+export function parseNativeVaultPublishResult(
+  value: unknown,
+  parentPath: string,
+): NativeVaultPublishResult {
+  if (value === null || typeof value !== "object" || !("kind" in value))
+    return { kind: "uncertain", effect: "published" };
+  const result = value as Record<string, unknown>;
+  if (
+    result.kind === "published" ||
+    result.kind === "collision" ||
+    result.kind === "failed"
+  )
+    return { kind: result.kind };
+  if (result.kind === "uncertain") {
+    if (result.effect === "published")
+      return { kind: "uncertain", effect: "published" };
+    if (result.effect === "temporary") {
+      const artifact = temporaryArtifact(result.temporaryArtifact, parentPath);
+      if (artifact !== undefined)
+        return {
+          kind: "uncertain",
+          effect: "temporary",
+          temporaryArtifact: artifact,
+        };
+    }
+  }
+  return { kind: "uncertain", effect: "published" };
+}
+
+/** Observe the physical identity of the vault root or a contained object. */
+export function observeNativeVaultIdentity(
+  basePath: string,
+  path: string,
+): NativeVaultIdentity | undefined {
+  if (
+    process.platform !== "darwin" ||
+    observer === undefined ||
+    !isM03WellFormedString(basePath) ||
+    !basePath.startsWith("/") ||
+    !validRelativePath(path, true)
+  )
+    return undefined;
+  try {
+    const result = observer.observeVaultIdentity(basePath, path);
+    if (
+      result === null ||
+      typeof result !== "object" ||
+      !("kind" in result) ||
+      result.kind !== "identity" ||
+      !("device" in result) ||
+      !("inode" in result)
+    )
+      return undefined;
+    const identity = { device: result.device, inode: result.inode };
+    return validIdentity(identity) ? identity : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Publish exact bytes without replacing an existing target. */
+export async function publishNativeVaultFileExclusive(
+  request: NativeVaultPublishRequest,
+): Promise<NativeVaultPublishResult> {
+  if (
+    process.platform !== "darwin" ||
+    observer === undefined ||
+    !isM03WellFormedString(request.basePath) ||
+    !request.basePath.startsWith("/") ||
+    !validRelativePath(request.parentPath) ||
+    !isM03WellFormedString(request.targetName) ||
+    request.targetName.includes("/") ||
+    request.targetName.includes("\\") ||
+    !validRelativePath(request.configPath) ||
+    !(request.bytes instanceof Uint8Array) ||
+    request.bytes.length > 1_064_960 ||
+    !validIdentity(request.vaultIdentity) ||
+    !validIdentity(request.parentIdentity) ||
+    !validIdentity(request.configIdentity)
+  )
+    return { kind: "failed" };
+  try {
+    const result = await observer.publishVaultFileExclusive(
+      request.basePath,
+      request.parentPath,
+      request.targetName,
+      request.configPath,
+      Buffer.from(request.bytes),
+      request.vaultIdentity.device,
+      request.vaultIdentity.inode,
+      request.parentIdentity.device,
+      request.parentIdentity.inode,
+      request.configIdentity.device,
+      request.configIdentity.inode,
+    );
+    return parseNativeVaultPublishResult(result, request.parentPath);
+  } catch {
+    return { kind: "uncertain", effect: "published" };
   }
 }
 

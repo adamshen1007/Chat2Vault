@@ -166,7 +166,7 @@ describe("M05/M06 runtime artifact comparator", () => {
     ).toBe(true);
   });
 
-  it("accepts only the exact seven approved M05-M07 runtime seams", async () => {
+  it("accepts only the exact eight approved M05-M08 runtime seams", async () => {
     const shared = {
       "src/main.ts": "export const main = 1;",
       "src/provider-transport.ts": "export const transport = 1;",
@@ -185,6 +185,7 @@ describe("M05/M06 runtime artifact comparator", () => {
         "src/runtime-test-mutation-ledger.ts": "export {};",
         "src/runtime-test-m07.ts": "export {};",
         "src/runtime-test-m07-ledger.ts": "export {};",
+        "src/runtime-test-m08.ts": "export {};",
       },
       { "src/main.ts": 8, "src/provider-transport.ts": 11 },
     );
@@ -216,6 +217,7 @@ describe("M05/M06 runtime artifact comparator", () => {
         "src/runtime-test-mutation-ledger.ts": "export {};",
         "src/runtime-test-m07.ts": "export {};",
         "src/runtime-test-m07-ledger.ts": "export {};",
+        "src/runtime-test-m08.ts": "export {};",
         "src/runtime-test-unapproved.ts": "export {};",
       },
       { "src/main.ts": 8, "src/provider-transport.ts": 11 },

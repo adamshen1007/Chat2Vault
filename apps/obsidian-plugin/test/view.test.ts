@@ -15,6 +15,7 @@ import {
 } from "@chat2vault/core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 
 import { ImportController } from "../src/controller.js";
@@ -24,6 +25,10 @@ import {
   type ManualDistillationViewServices,
 } from "../src/view.js";
 import type { KnowledgeVaultAdapter } from "../src/knowledge-vault-adapter.js";
+import type {
+  CaptureReconciliationStatus,
+  CaptureWritePlan,
+} from "../src/capture-vault-adapter.js";
 
 beforeAll(() => {
   HTMLElement.prototype.empty = function (): void {
@@ -382,6 +387,27 @@ async function openKnowledgeView(
     catalogNotes,
     openedNotes,
     invalidate: (reason) => invalidator?.(reason),
+  };
+}
+
+function capturePlan(
+  markdown: string,
+): Exclude<CaptureWritePlan, { disposition: "blocked" }> {
+  return {
+    disposition: "create",
+    sourceRoot: {
+      logicalPath: "Sources",
+      resolvedPath: "Sources",
+      realPath: "/vault/Sources",
+      physicalIdentity: { device: "1", inode: "2" },
+    },
+    vaultIdentity: { device: "1", inode: "1" },
+    configIdentity: { device: "1", inode: "3" },
+    sourceInputFingerprint: `sha256:${"1".repeat(64)}`,
+    settingsFingerprint: "sha256:settings",
+    targetPath: "Sources/Synthetic capture.md",
+    markdown,
+    outputDigest: "sha256:output",
   };
 }
 
@@ -2128,6 +2154,308 @@ describe("preview view", () => {
       "UNSUPPORTED_SOURCE_WRITER_PLATFORM: Source-note writing is not qualified on this operating system in M03.",
     );
     expect(adapterCalls).toBe(0);
+    await view.onClose();
+  });
+
+  it("renders explicit capture actions, inert previews, warnings, and enables save only for the current plan", async () => {
+    const controller = new ImportController(() =>
+      Promise.resolve(importResult([])),
+    );
+    const hostile = "<script>synthetic capture</script>";
+    const markdown = `---\ntype: "ai-conversation-web-capture"\ncapture_scope: "visible-page-unverified"\n---\n\n    ${hostile}\n`;
+    const plan = capturePlan(markdown);
+    const staging = new TextEncoder().encode(
+      '---\nchat2vault_capture: 1\ncapture_method: "obsidian-web-clipper"\ncapture_scope: "visible-page-unverified"\nsource_provider: "chatgpt"\nsource_url: "https://chatgpt.com/c/11111111-1111-4111-8111-111111111111"\n---\nSynthetic staging capture',
+    );
+    let saves = 0;
+    let publishUncertain: "none" | "published" | "temporary" = "none";
+    let temporaryIdentityAvailable = true;
+    let reconciliation: CaptureReconciliationStatus = { status: "clear" };
+    let invalidator:
+      | ((
+          reason:
+            "settings" | "unload" | "active-file-edit" | "active-file-switch",
+        ) => void)
+      | undefined;
+    const view = new Chat2VaultView(
+      {} as never,
+      controller,
+      () => 25,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        currentActiveFile: () => ({
+          path: "Staging/clip.md",
+          identity: "1:2:3",
+        }),
+        sourceRoot: () => "Sources",
+        sourceRootPending: () => false,
+        settingsGeneration: () => 1,
+        adapter: {
+          reconciliation: () => reconciliation,
+          acknowledgeReconciliation: () => {
+            reconciliation = { status: "clear" };
+            return Promise.resolve({ status: "cleared" });
+          },
+          readActiveStaging: () =>
+            Promise.resolve({ bytes: staging, digest: "sha256:staging" }),
+          plan: () => Promise.resolve(plan),
+          save: () => {
+            saves += 1;
+            return Promise.resolve(
+              publishUncertain === "published"
+                ? {
+                    status: "blocked" as const,
+                    code: "CAPTURE_PUBLISH_UNCERTAIN",
+                    effect: "published" as const,
+                  }
+                : publishUncertain === "temporary"
+                  ? {
+                      status: "blocked" as const,
+                      code: "CAPTURE_EFFECT_UNCERTAIN",
+                      effect: "temporary" as const,
+                      temporaryArtifact: {
+                        path: "Sources/.chat2vault-private-123",
+                        ownership: "unverified" as const,
+                        ...(temporaryIdentityAvailable
+                          ? { identity: { device: "1", inode: "77" } }
+                          : {}),
+                      },
+                    }
+                  : {
+                      status: "saved" as const,
+                      path: plan.targetPath,
+                    },
+            );
+          },
+        },
+        openCaptureSource: () =>
+          Promise.reject(new Error("synthetic open failure")),
+        registerInvalidator: (next) => {
+          invalidator = next;
+          return () => {
+            invalidator = undefined;
+          };
+        },
+      },
+    );
+    document.body.append(view.contentEl);
+    await view.onOpen();
+
+    const labels = [...view.contentEl.querySelectorAll("button")].map(
+      (button) => button.textContent,
+    );
+    expect(labels).toContain("Preview ChatGPT capture");
+    expect(labels).toContain("Paste ChatGPT capture");
+    expect(labels).toContain("Save capture source");
+    let save = [...view.contentEl.querySelectorAll("button")].find(
+      (button) => button.textContent === "Save capture source",
+    );
+    expect(save?.disabled).toBe(true);
+    view.contentEl
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Preview ChatGPT capture"]',
+      )
+      ?.click();
+    await flush();
+    expect(view.contentEl.textContent).toContain(
+      "Origin: Obsidian Web Clipper staging note",
+    );
+
+    const paste = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="ChatGPT capture text"]',
+    );
+    if (paste === null) throw new Error("missing capture textarea");
+    paste.value = hostile;
+    paste.dispatchEvent(new Event("input", { bubbles: true }));
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Paste ChatGPT capture"]')
+      ?.click();
+    await flush();
+
+    expect(view.contentEl.textContent).toContain("visible-page-unverified");
+    expect(view.contentEl.textContent).toContain("Origin: Manual paste");
+    expect(view.contentEl.textContent).toContain(
+      "No provider-page URL will be preserved",
+    );
+    expect(view.contentEl.textContent).toContain(hostile);
+    expect(view.contentEl.querySelector("script")).toBeNull();
+    expect(
+      view.contentEl.querySelector<HTMLElement>(
+        '[aria-label="Proposed capture source note"]',
+      )?.textContent,
+    ).toBe(markdown);
+    save = [...view.contentEl.querySelectorAll("button")].find(
+      (button) => button.textContent === "Save capture source",
+    );
+    expect(save?.disabled).toBe(false);
+    save?.click();
+    await flush();
+    expect(saves).toBe(1);
+    expect(view.contentEl.textContent).toContain(
+      "Capture source saved: Sources/Synthetic capture.md",
+    );
+    expect(view.contentEl.textContent).toContain(
+      "The saved capture source could not be opened automatically.",
+    );
+
+    publishUncertain = "published";
+    const replacement = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="ChatGPT capture text"]',
+    );
+    if (replacement === null) throw new Error("missing replacement textarea");
+    replacement.value = "Replacement synthetic capture";
+    replacement.dispatchEvent(new Event("input", { bubbles: true }));
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Paste ChatGPT capture"]')
+      ?.click();
+    await flush();
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Save capture source"]')
+      ?.click();
+    await flush();
+    expect(view.contentEl.textContent).toContain(
+      "Capture publication may have occurred at Sources/Synthetic capture.md. Reconcile the source folder before retrying.",
+    );
+
+    invalidator?.("active-file-edit");
+    expect(view.contentEl.textContent).toContain(
+      "Capture publication may have occurred at Sources/Synthetic capture.md.",
+    );
+    for (const label of [
+      "Preview ChatGPT capture",
+      "Paste ChatGPT capture",
+      "Save capture source",
+    ])
+      expect(
+        view.contentEl.querySelector<HTMLButtonElement>(
+          `[aria-label="${label}"]`,
+        )?.disabled,
+      ).toBe(true);
+    expect(view.contentEl.textContent).toContain(
+      "Inspect this exact target, resolve whether it was published, then acknowledge reconciliation.",
+    );
+    view.contentEl
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Acknowledge capture reconciliation"]',
+      )
+      ?.click();
+    await flush();
+
+    publishUncertain = "temporary";
+    const tempPaste = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="ChatGPT capture text"]',
+    );
+    if (tempPaste === null) throw new Error("missing temporary textarea");
+    tempPaste.value = "Temporary artifact synthetic capture";
+    tempPaste.dispatchEvent(new Event("input", { bubbles: true }));
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Paste ChatGPT capture"]')
+      ?.click();
+    await flush();
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Save capture source"]')
+      ?.click();
+    await flush();
+    expect(view.contentEl.textContent).toContain(
+      "Unverified retained temporary candidate: Sources/.chat2vault-private-123",
+    );
+    expect(view.contentEl.textContent).toContain(
+      "File identity: device 1, inode 77",
+    );
+    expect(view.contentEl.textContent).toContain(
+      "Do not delete it based on this message. Inspect and reconcile it manually, then acknowledge reconciliation.",
+    );
+    invalidator?.("active-file-edit");
+    expect(view.contentEl.textContent).toContain(
+      "Sources/.chat2vault-private-123",
+    );
+    expect(
+      [...view.contentEl.querySelectorAll("button")].find(
+        (button) => button.textContent === "Save capture source",
+      )?.disabled,
+    ).toBe(true);
+    view.contentEl
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Acknowledge capture reconciliation"]',
+      )
+      ?.click();
+    await flush();
+    temporaryIdentityAvailable = false;
+    const unidentifiedPaste = view.contentEl.querySelector<HTMLTextAreaElement>(
+      '[aria-label="ChatGPT capture text"]',
+    );
+    if (unidentifiedPaste === null)
+      throw new Error("missing unidentified temporary textarea");
+    unidentifiedPaste.value = "Unidentified temporary synthetic capture";
+    unidentifiedPaste.dispatchEvent(new Event("input", { bubbles: true }));
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Paste ChatGPT capture"]')
+      ?.click();
+    await flush();
+    view.contentEl
+      .querySelector<HTMLButtonElement>('[aria-label="Save capture source"]')
+      ?.click();
+    await flush();
+    expect(view.contentEl.textContent).toContain(
+      "Physical identity was unavailable.",
+    );
+    expect(view.contentEl.textContent).toContain(
+      "Do not delete it based on this message.",
+    );
+    view.contentEl
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Acknowledge capture reconciliation"]',
+      )
+      ?.click();
+    await flush();
+    reconciliation = {
+      status: "unresolved",
+      record: {
+        version: 1,
+        state: "temporary-uncertain",
+        transactionId: "223e4567-e89b-42d3-a456-426614174000",
+        targetPathDigest: `sha256:${"a".repeat(64)}`,
+        targetLocator: "0123456789ab",
+        sourceRootPathDigest: `sha256:${"b".repeat(64)}`,
+        sourceRootIdentity: { device: "1", inode: "2" },
+        temporaryCandidate: {
+          name: ".chat2vault-private-777",
+          ownership: "unverified",
+        },
+      },
+    };
+    invalidator?.("active-file-edit");
+    expect(view.contentEl.textContent).toContain(
+      'name ends with " - 0123456789ab.md"',
+    );
+    expect(view.contentEl.textContent).toContain(
+      "configured source folder has changed",
+    );
+    expect(view.contentEl.textContent).toContain("device 1, inode 2");
+    expect(view.contentEl.textContent).toContain(
+      "find . -xdev -type d -inum 2 -print",
+    );
+    expect(view.contentEl.textContent).toContain(".chat2vault-private-777");
+    reconciliation = {
+      ...reconciliation,
+      record: {
+        ...reconciliation.record,
+        sourceRootPathDigest: `sha256:${createHash("sha256").update("Sources").digest("hex")}`,
+      },
+    };
+    invalidator?.("active-file-edit");
+    expect(view.contentEl.textContent).toContain(
+      "find . -xdev -type d -inum 2 -print",
+    );
+    expect(view.contentEl.textContent).toContain("exactly 1:2");
+    expect(
+      view.contentEl.querySelector<HTMLButtonElement>(
+        '[aria-label="Paste ChatGPT capture"]',
+      )?.disabled,
+    ).toBe(true);
     await view.onClose();
   });
 });

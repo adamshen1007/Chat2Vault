@@ -67,6 +67,12 @@ import {
 import type { ObsidianKnowledgeCatalogAdapter } from "./knowledge-catalog-adapter.js";
 import type { KnowledgeVaultAdapter } from "./knowledge-vault-adapter.js";
 import { KnowledgeDedupPanel } from "./dedup-panel.js";
+import {
+  CaptureController,
+  type CaptureActiveFileAuthority,
+  type CaptureInvalidationReason,
+} from "./capture-controller.js";
+import type { CaptureVaultAdapter } from "./capture-vault-adapter.js";
 
 export const VIEW_TYPE = "chat-to-vault-preview";
 
@@ -129,6 +135,20 @@ export interface KnowledgeViewServices {
   openKnowledgeNote?(path: string): Promise<void>;
   registerInvalidator(
     invalidator: (reason: "settings" | "unload") => void,
+  ): () => void;
+}
+
+export interface CaptureViewServices {
+  currentActiveFile(): CaptureActiveFileAuthority | undefined;
+  sourceRoot(): string;
+  sourceRootPending(): boolean;
+  settingsGeneration(): number;
+  adapter: CaptureVaultAdapter;
+  openCaptureSource?(path: string): Promise<void>;
+  registerInvalidator(
+    invalidator: (
+      reason: "settings" | "unload" | "active-file-edit" | "active-file-switch",
+    ) => void,
   ): () => void;
 }
 
@@ -201,6 +221,11 @@ export class Chat2VaultView extends ItemView {
   private knowledgeEditDiagnostics: readonly M06Diagnostic[] = [];
   private distillationGeneration = 0;
   private unregisterKnowledgeInvalidator?: () => void;
+  private captureController?: CaptureController;
+  private capturePaste = "";
+  private captureUrl = "";
+  private captureOpenFailure = false;
+  private unregisterCaptureInvalidator?: () => void;
   public constructor(
     leaf: WorkspaceLeaf,
     private readonly controller: ImportController,
@@ -209,6 +234,7 @@ export class Chat2VaultView extends ItemView {
     distillationServices?: ManualDistillationViewServices,
     providerServices?: ProviderViewServices,
     private readonly knowledgeServices?: KnowledgeViewServices,
+    private readonly captureServices?: CaptureViewServices,
   ) {
     super(leaf);
     this.providerStatusRegion = this.contentEl.ownerDocument.createElement("p");
@@ -376,6 +402,31 @@ export class Chat2VaultView extends ItemView {
       if (unregisterStateObserver !== undefined)
         this.unregisterProviderStateObserver = unregisterStateObserver;
     }
+    if (captureServices !== undefined) {
+      this.captureController = new CaptureController({
+        current: () => {
+          const activeFile = captureServices.currentActiveFile();
+          return {
+            loaded: this.loaded,
+            lifecycleGeneration: this.viewGeneration,
+            settingsGeneration: captureServices.settingsGeneration(),
+            sourceRoot: captureServices.sourceRoot(),
+            sourceRootPending: captureServices.sourceRootPending(),
+            ...(activeFile === undefined ? {} : { activeFile }),
+          };
+        },
+        adapter: captureServices.adapter,
+      });
+      this.unregisterCaptureInvalidator = captureServices.registerInvalidator(
+        (reason) => {
+          if (reason === "unload") this.loaded = false;
+          this.captureController?.invalidate(
+            reason === "unload" ? "plugin-unload" : reason,
+          );
+          if (this.loaded) this.draw(this.controller.snapshot);
+        },
+      );
+    }
   }
   public getViewType(): string {
     return VIEW_TYPE;
@@ -404,11 +455,13 @@ export class Chat2VaultView extends ItemView {
     this.invalidateSourceState();
     this.invalidateDistillation(true, true);
     this.invalidateKnowledgeState();
+    this.captureController?.invalidate("view-close");
     this.unregisterSourceInvalidator?.();
     this.unregisterDistillationInvalidator?.();
     this.unregisterProviderInvalidator?.();
     this.unregisterProviderStateObserver?.();
     this.unregisterKnowledgeInvalidator?.();
+    this.unregisterCaptureInvalidator?.();
     this.unsubscribe?.();
     this.controller.close();
     this.contentEl.ondragover = null;
@@ -418,6 +471,16 @@ export class Chat2VaultView extends ItemView {
   }
   public focusImport(): void {
     this.chooseButton?.focus();
+  }
+  public previewActiveCapture(
+    authority = this.captureServices?.currentActiveFile(),
+  ): void {
+    if (authority === undefined) {
+      this.captureController?.invalidate("active-file-switch");
+      this.draw(this.controller.snapshot);
+      return;
+    }
+    void this.previewCaptureStaging(authority);
   }
   private providerCurrent(): ProviderCurrent {
     const shared = this.providerServices?.current();
@@ -531,6 +594,7 @@ export class Chat2VaultView extends ItemView {
       this.controller.clear();
       this.contentEl.querySelector<HTMLButtonElement>(".c2v-choose")?.focus();
     });
+    this.drawCapture(root);
     root.ondragover = (event) => {
       event.preventDefault();
     };
@@ -586,6 +650,221 @@ export class Chat2VaultView extends ItemView {
       snapshot.result.diagnostics,
     );
     if (stateChanged) this.focusState(snapshot.state);
+  }
+
+  private invalidateCapture(reason: CaptureInvalidationReason): void {
+    this.captureController?.invalidate(reason);
+  }
+
+  private drawCapture(root: HTMLElement): void {
+    const controller = this.captureController;
+    if (controller === undefined) return;
+    const snapshot = controller.snapshot;
+    const reconciliationRequired =
+      snapshot.status === "reconciliation-required";
+    const panel = root.createEl("section", { cls: "c2v-capture" });
+    panel.setAttr("aria-label", "ChatGPT page capture");
+    panel.createEl("h3", { text: "ChatGPT page capture" });
+    const captureStatusText =
+      snapshot.status === "blocked"
+        ? `Capture blocked: ${snapshot.code}${snapshot.effect === undefined ? "" : `; possible effect: ${snapshot.effect}`}`
+        : snapshot.status === "reconciliation-required" &&
+            snapshot.effect === "published"
+          ? `Capture publication may have occurred at ${snapshot.targetPath}. Reconcile the source folder before retrying. Inspect this exact target, resolve whether it was published, then acknowledge reconciliation. ${snapshot.code}`
+          : snapshot.status === "reconciliation-required" &&
+              snapshot.effect === "temporary"
+            ? `A private capture artifact may remain. Unverified retained temporary candidate: ${snapshot.temporaryArtifact.path}.${snapshot.temporaryArtifact.identity === undefined ? " Physical identity was unavailable." : ` File identity: device ${snapshot.temporaryArtifact.identity.device}, inode ${snapshot.temporaryArtifact.identity.inode}.`} Do not delete it based on this message. Inspect and reconcile it manually, then acknowledge reconciliation. Planned target: ${snapshot.targetPath}. ${snapshot.code}`
+            : snapshot.status === "reconciliation-required" &&
+                snapshot.effect === "durable"
+              ? `Capture reconciliation is required after an interrupted or uncertain write. Inspect the original source folder${snapshot.sourceRootChanged ? " (the configured source folder has changed; do not substitute the current folder)" : "; the configured path may now point to a different physical folder"} for files whose name ends with " - ${snapshot.targetLocator}.md". Confirm the filesystem outcome independently; the stored target digest ${snapshot.targetPathDigest} does not prove presence or absence. Original source-folder identity: device ${snapshot.sourceRootIdentity.device}, inode ${snapshot.sourceRootIdentity.inode}. From the vault root, use the read-only command find . -xdev -type d -inum ${snapshot.sourceRootIdentity.inode} -print, then run stat -f '%d:%i' -- '<candidate>' and require exactly ${snapshot.sourceRootIdentity.device}:${snapshot.sourceRootIdentity.inode}. If the original physical folder cannot be located, do not acknowledge. Inspect any .chat2vault-private-* entries without deleting them.${snapshot.temporaryCandidate === undefined ? "" : ` The retained unverified candidate name is ${snapshot.temporaryCandidate.name}.`} Keep capture disabled until inspection is complete, then acknowledge reconciliation. ${snapshot.code}`
+              : snapshot.status === "reconciliation-required"
+                ? `Capture reconciliation metadata could not be loaded or durably prepared. Capture remains disabled. Inspect the configured source folder and Chat2Vault private temporary candidates manually; do not infer absence from this message. Repair or restore the settings record before acknowledging. ${snapshot.code}`
+                : `Capture status: ${snapshot.status}`;
+    panel.createEl("p", {
+      text: "Capture only the visible or pasted page text. Scope: visible-page-unverified; collapsed turns, lazy loading, selections, and site changes may omit content.",
+    });
+
+    const active = this.captureServices?.currentActiveFile();
+    panel.createEl("p", {
+      text:
+        active === undefined
+          ? "Active staging note: none"
+          : `Active staging note: ${active.path}`,
+    });
+    const stagingActions = panel.createDiv({ cls: "c2v-actions" });
+    const preview = this.button(
+      stagingActions,
+      "Preview ChatGPT capture",
+      () => {
+        this.previewActiveCapture();
+      },
+    );
+    preview.setAttr("aria-label", "Preview ChatGPT capture");
+    preview.disabled =
+      active === undefined ||
+      reconciliationRequired ||
+      snapshot.status === "previewing" ||
+      snapshot.status === "saving";
+
+    const paste = panel.createEl("textarea", { cls: "c2v-capture-paste" });
+    paste.value = this.capturePaste;
+    paste.spellcheck = false;
+    paste.wrap = "soft";
+    paste.setAttr("aria-label", "ChatGPT capture text");
+    paste.setAttr("placeholder", "Paste visible ChatGPT page text");
+    paste.addEventListener("input", () => {
+      this.capturePaste = paste.value;
+      this.invalidateCapture("paste-edit");
+      this.draw(this.controller.snapshot);
+      this.contentEl
+        .querySelector<HTMLTextAreaElement>(
+          '[aria-label="ChatGPT capture text"]',
+        )
+        ?.focus();
+    });
+    const url = panel.createEl("input", {
+      type: "url",
+      value: this.captureUrl,
+      placeholder: "Optional https://chatgpt.com/c/... URL",
+    });
+    url.setAttr("aria-label", "ChatGPT capture URL");
+    url.addEventListener("input", () => {
+      this.captureUrl = url.value;
+      this.invalidateCapture("url-edit");
+      this.draw(this.controller.snapshot);
+      this.contentEl
+        .querySelector<HTMLInputElement>('[aria-label="ChatGPT capture URL"]')
+        ?.focus();
+    });
+    const captureActions = panel.createDiv({ cls: "c2v-actions" });
+    const pasteAction = this.button(
+      captureActions,
+      "Paste ChatGPT capture",
+      () => {
+        void this.previewCapturePaste();
+      },
+    );
+    pasteAction.setAttr("aria-label", "Paste ChatGPT capture");
+    pasteAction.disabled =
+      this.capturePaste.length === 0 ||
+      reconciliationRequired ||
+      snapshot.status === "previewing" ||
+      snapshot.status === "saving";
+    const save = this.button(captureActions, "Save capture source", () => {
+      void this.saveCapture();
+    });
+    save.setAttr("aria-label", "Save capture source");
+    save.disabled = snapshot.status !== "ready";
+
+    panel.createEl("p", {
+      cls:
+        snapshot.status === "blocked" ||
+        snapshot.status === "reconciliation-required"
+          ? "c2v-error"
+          : "c2v-capture-status",
+      text: captureStatusText,
+    });
+    if (snapshot.status === "reconciliation-required") {
+      const acknowledge = this.button(
+        panel,
+        "I reconciled this capture artifact",
+        () => {
+          void controller.acknowledgeReconciliation().then(() => {
+            this.draw(this.controller.snapshot);
+          });
+        },
+      );
+      acknowledge.setAttr("aria-label", "Acknowledge capture reconciliation");
+    }
+    if (
+      snapshot.status === "ready" ||
+      snapshot.status === "saving" ||
+      snapshot.status === "saved"
+    ) {
+      panel.createEl("p", {
+        text: "Warning: scope is visible-page-unverified; this is not a complete-conversation claim.",
+      });
+      panel.createEl("p", {
+        text:
+          snapshot.mode === "staging"
+            ? "Origin: Obsidian Web Clipper staging note"
+            : "Origin: Manual paste",
+      });
+      if (snapshot.draft.sourceUrl === undefined)
+        panel.createEl("p", {
+          cls: "c2v-error",
+          text: "No provider-page URL will be preserved for this capture.",
+        });
+      else
+        panel.createEl("p", {
+          text: `Normalized source URL: ${snapshot.draft.sourceUrl}`,
+        });
+      panel.createEl("p", {
+        text: `Captured text bytes: ${String(new TextEncoder().encode(snapshot.draft.text).length)}`,
+      });
+      const captured = panel.createEl("pre").createEl("code");
+      captured.setAttr("aria-label", "Captured text preview");
+      captured.textContent = snapshot.draft.text;
+    }
+    if (snapshot.status === "ready" || snapshot.status === "saving") {
+      panel.createEl("p", { text: `Target: ${snapshot.plan.targetPath}` });
+      const proposed = panel.createEl("pre").createEl("code");
+      proposed.setAttr("aria-label", "Proposed capture source note");
+      proposed.textContent = snapshot.plan.markdown;
+    }
+    if (snapshot.status === "saved")
+      panel.createEl("p", {
+        text: `Capture source saved: ${snapshot.path}${snapshot.authorityChanged ? ". The capture context changed after save; the confirmed saved path is preserved." : ""}`,
+      });
+    if (this.captureOpenFailure)
+      panel.createEl("p", {
+        cls: "c2v-error",
+        text: "The saved capture source could not be opened automatically.",
+      });
+  }
+
+  private async previewCaptureStaging(
+    authority: CaptureActiveFileAuthority,
+  ): Promise<void> {
+    const controller = this.captureController;
+    if (controller === undefined) return;
+    this.captureOpenFailure = false;
+    const pending = controller.previewStaging(authority.path, authority);
+    this.draw(this.controller.snapshot);
+    await pending;
+    if (this.loaded) this.draw(this.controller.snapshot);
+  }
+
+  private async previewCapturePaste(): Promise<void> {
+    const controller = this.captureController;
+    if (controller === undefined) return;
+    this.captureOpenFailure = false;
+    const pending = controller.previewPaste(
+      this.capturePaste,
+      this.captureUrl === "" ? undefined : this.captureUrl,
+    );
+    this.draw(this.controller.snapshot);
+    await pending;
+    if (this.loaded) this.draw(this.controller.snapshot);
+  }
+
+  private async saveCapture(): Promise<void> {
+    const controller = this.captureController;
+    if (controller === undefined) return;
+    this.captureOpenFailure = false;
+    const pending = controller.save();
+    this.draw(this.controller.snapshot);
+    const result = await pending;
+    if (
+      this.loaded &&
+      (result.status === "saved" || result.status === "existing-identical")
+    )
+      try {
+        await this.captureServices?.openCaptureSource?.(result.path);
+      } catch {
+        this.captureOpenFailure = true;
+      }
+    if (this.loaded) this.draw(this.controller.snapshot);
   }
   private drawResult(
     root: HTMLElement,

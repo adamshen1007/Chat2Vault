@@ -6,20 +6,34 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = dirname(root);
+const testOnly = process.argv.includes("--test-only");
 const modules = [
   {
     source: join(pluginRoot, "native", "source_observer.cc"),
     output: join(pluginRoot, "native", "source_observer.node"),
     frameworks: [],
     label: "source observer",
+    flags: [],
+  },
+  {
+    source: join(pluginRoot, "native", "source_observer.cc"),
+    output: join(pluginRoot, "native", "source_observer_test.node"),
+    frameworks: [],
+    label: "test-only source observer",
+    flags: ["-DCHAT2VAULT_NATIVE_TESTING=1"],
   },
   {
     source: join(pluginRoot, "native", "keychain.cc"),
     output: join(pluginRoot, "native", "keychain.node"),
     frameworks: ["Security", "CoreFoundation"],
     label: "Keychain module",
+    flags: [],
   },
-];
+].filter((module) =>
+  testOnly
+    ? module.label === "test-only source observer"
+    : module.label !== "test-only source observer",
+);
 
 if (process.platform === "darwin" && process.arch === "x64") {
   const include = join(dirname(dirname(process.execPath)), "include", "node");
@@ -38,6 +52,7 @@ if (process.platform === "darwin" && process.arch === "x64") {
         "-o",
         module.output,
         module.source,
+        ...module.flags,
         ...module.frameworks.flatMap((framework) => ["-framework", framework]),
       ],
       { stdio: "inherit" },

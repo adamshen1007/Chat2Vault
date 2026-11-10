@@ -7,7 +7,27 @@ import {
   pageItems,
 } from "../src/model.js";
 
+function measuredCpuMs<T>(action: () => T): { value: T; milliseconds: number } {
+  const started = process.cpuUsage();
+  const value = action();
+  const elapsed = process.cpuUsage(started);
+  return {
+    value,
+    milliseconds: (elapsed.user + elapsed.system) / 1_000,
+  };
+}
+
 describe("bounded model performance", () => {
+  it("measures model work independently of scheduler delay", () => {
+    const waitArray = new Int32Array(new SharedArrayBuffer(4));
+    const wallStarted = performance.now();
+    const measured = measuredCpuMs(() => Atomics.wait(waitArray, 0, 0, 25));
+    const wallMilliseconds = performance.now() - wallStarted;
+    expect(measured.value).toBe("timed-out");
+    expect(wallMilliseconds).toBeGreaterThan(20);
+    expect(measured.milliseconds).toBeLessThan(wallMilliseconds);
+  });
+
   it("orders and filters 10,000 conversations within the pure-model budgets", () => {
     const conversations: CanonicalConversation[] = Array.from(
       { length: 10_000 },
@@ -21,13 +41,14 @@ describe("bounded model performance", () => {
         contentFingerprint: `sha256:${String(ordinal).padStart(64, "0")}`,
       }),
     );
-    const start = performance.now();
-    const ordered = orderConversations(conversations);
-    const initial = performance.now() - start;
+    const { value: ordered, milliseconds: initial } = measuredCpuMs(() =>
+      orderConversations(conversations),
+    );
     const samples = Array.from({ length: 20 }, (_, index) => {
-      const sampleStart = performance.now();
-      filterConversations(ordered, ` ${String(index)} `);
-      return performance.now() - sampleStart;
+      const measured = measuredCpuMs(() =>
+        filterConversations(ordered, ` ${String(index)} `),
+      );
+      return measured.milliseconds;
     }).sort((left, right) => left - right);
     expect(initial).toBeLessThanOrEqual(250);
     expect(samples[18]).toBeLessThanOrEqual(100);
