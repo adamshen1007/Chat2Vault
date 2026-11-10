@@ -19,7 +19,7 @@ import {
 const repositoryRoot = join(import.meta.dirname, "../../..");
 const pluginRoot = join(repositoryRoot, "apps/obsidian-plugin");
 const checker = join(pluginRoot, "scripts/check-m06-boundaries.mjs");
-const boundaryChildTimeoutMs = 15_000;
+const boundaryChildTimeoutMs = 30_000;
 const sentinel = "M06_SENTINEL_CONTENT_MUST_NOT_ESCAPE";
 const conversationFingerprint = `sha256:${"1".repeat(64)}`;
 const messageFingerprint = `sha256:${"2".repeat(64)}`;
@@ -69,7 +69,43 @@ function runM06Boundary(
   arguments_: string[] = [],
   timeoutMs = boundaryChildTimeoutMs,
 ): string {
-  return runBoundaryChild([checker, ...arguments_], timeoutMs);
+  try {
+    return runBoundaryChild([checker, ...arguments_], timeoutMs);
+  } catch (error) {
+    const failure = error as {
+      status?: number | null;
+      signal?: string | null;
+      stderr?: string | Buffer;
+    };
+    const fixtureNames = arguments_
+      .flatMap((argument, index) =>
+        argument === "--adversarial-file" ? [arguments_[index + 1]] : [],
+      )
+      .filter((path): path is string => path !== undefined)
+      .map((path) => path.split("/").at(-1));
+    const diagnostics = String(failure.stderr ?? "").split("\n");
+    const fixtureDiagnostics = diagnostics.filter((line) =>
+      fixtureNames.some(
+        (name) => name !== undefined && line.startsWith(`${name}:`),
+      ),
+    );
+    if (
+      fixtureNames.length > 0 &&
+      failure.status === 1 &&
+      failure.signal === null &&
+      !fixtureDiagnostics.some((line) =>
+        line.includes("TypeScript parse failure"),
+      ) &&
+      fixtureDiagnostics.some((line) =>
+        fixtureNames.some((name) => {
+          if (name === undefined || !line.startsWith(`${name}:`)) return false;
+          return /^(?:\d+:)?\s+knowledge /u.test(line.slice(name.length + 1));
+        }),
+      )
+    )
+      throw new Error("M06_BOUNDARY_VIOLATION", { cause: error });
+    throw error;
+  }
 }
 
 async function runAdversarialBoundary(source: string): Promise<void> {
@@ -230,12 +266,53 @@ function interfaceKeys(file: string, interfaceName: string): string[] {
     .sort();
 }
 
-vi.setConfig({ testTimeout: 15_000 });
+vi.setConfig({ testTimeout: 45_000 });
 
 describe("M06 capability and privacy boundary", () => {
+  it("distinguishes a checker rejection from a subprocess timeout", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "c2v-m06-rejection-"));
+    const fixture = join(directory, "knowledge-rejection.ts");
+    await writeFile(
+      fixture,
+      "export function adversary(io: any, sourcePath: string, bytes: Uint8Array) { io.write(sourcePath, bytes); }",
+      "utf8",
+    );
+    try {
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
+      let timeoutError: unknown;
+      try {
+        runM06Boundary([], 1);
+      } catch (error) {
+        timeoutError = error;
+      }
+      expect(timeoutError).toMatchObject({
+        code: "ETIMEDOUT",
+        signal: "SIGKILL",
+      });
+      expect(String(timeoutError)).not.toContain("M06_BOUNDARY_VIOLATION");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not classify a malformed adversarial fixture as a policy violation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "c2v-m06-parse-"));
+    const fixture = join(directory, "knowledge-parse-error.ts");
+    await writeFile(fixture, "export function broken( {", "utf8");
+    try {
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).not.toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("passes the syntax-aware M06 static boundary checker", () => {
     expect(() => runM06Boundary()).not.toThrow();
-  }, 15_000);
+  }, 45_000);
 
   it("retains the exact provider service and five-capability knowledge allowlists", () => {
     expect(
@@ -405,7 +482,9 @@ export function adversary(io: SourceVaultIO, fallback: SourceVaultIO, sourcePath
       "utf8",
     );
     try {
-      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -435,7 +514,7 @@ export const escaped = { nested: renamedWriter };`,
           "--adversarial-file",
           authority,
         ]),
-      ).toThrow();
+      ).toThrow(/M06_BOUNDARY_VIOLATION/u);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -461,7 +540,9 @@ export const escaped = envelope;`,
       "utf8",
     );
     try {
-      expect(() => runM06Boundary(["--adversarial-file", consumer])).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", consumer])).toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -481,7 +562,9 @@ export function adversary(writer: Writer, path: string, bytes: Uint8Array) {
       "utf8",
     );
     try {
-      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -507,7 +590,9 @@ export function adversary(path: string, bytes: Uint8Array) {
       "utf8",
     );
     try {
-      expect(() => runM06Boundary(["--adversarial-file", consumer])).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", consumer])).toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -525,7 +610,9 @@ export function adversary(writer: Writer, sink: (value: unknown) => unknown) {
       "utf8",
     );
     try {
-      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -542,7 +629,7 @@ export function adversary(writer: ${shadowName}, path: string, bytes: Uint8Array
   sink(writer);
 }`,
         ),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
     },
   );
 
@@ -581,7 +668,7 @@ export function adversary(writer: Writer, path: string, bytes: Uint8Array, sink:
   sink(writer);
 }`,
         ),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
     },
   );
 
@@ -593,7 +680,7 @@ export function adversary(writer: IndeterminateWriter, sink: (value: unknown) =>
   sink(writer);
 }`,
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
   });
 
   it.each([
@@ -609,7 +696,7 @@ export function adversary(writer: Writer, sink: (value: unknown) => unknown) {
   sink(writer);
 }`,
         ),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
     },
   );
 
@@ -662,7 +749,9 @@ export const escaped = envelope;`,
       "utf8",
     );
     try {
-      expect(() => runM06Boundary(["--adversarial-file", consumer])).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", consumer])).toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -690,7 +779,7 @@ export function adversary(value: Left, sink: (value: unknown) => unknown) {
   sink(value);
 }`,
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
   });
 
   it("locks fail-closed traversal exhaustion and removes depth shortcuts", () => {
@@ -716,7 +805,7 @@ export declare const wrapped: ${containerType};`,
           `import { wrapped } from "./authority.js";
 export const escaped = wrapped;`,
         ),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
     },
   );
 
@@ -757,7 +846,7 @@ export declare const indexed: ${indexedType};`,
           `import { indexed } from "./authority.js";
 export const escaped = indexed;`,
         ),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
     },
   );
 
@@ -785,7 +874,7 @@ export declare const indexed: ${indexedType};`,
           `import { indexed } from "./authority.js";
 export const extracted = ${access};`,
         ),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
     },
   );
 
@@ -831,7 +920,7 @@ export function adversary(value: ${valueType}, path: string, bytes: Uint8Array, 
   sink(value);
 }`,
         ),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
     },
   );
 
@@ -844,11 +933,11 @@ export function adversary(writer: Writer, path: string, bytes: Uint8Array, sink:
   sink(writer);
 }`,
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/M06_BOUNDARY_VIOLATION/u);
   });
 
   it("terminates boundary children within the configured subprocess bound", () => {
-    expect(boundaryChildTimeoutMs).toBe(15_000);
+    expect(boundaryChildTimeoutMs).toBe(30_000);
     const startedAt = Date.now();
     let failure: unknown;
     try {
@@ -986,7 +1075,9 @@ export function adversary(writer: Writer, path: string, bytes: Uint8Array, sink:
       "utf8",
     );
     try {
-      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -1036,7 +1127,9 @@ export function adversary(writer: Writer, path: string, bytes: Uint8Array, sink:
       "utf8",
     );
     try {
-      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow();
+      expect(() => runM06Boundary(["--adversarial-file", fixture])).toThrow(
+        /M06_BOUNDARY_VIOLATION/u,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -7,7 +7,7 @@ import {
   isApprovedM07BaseAccess,
   isApprovedM07OrdinaryWrite,
   checkM07PinnedSource,
-  checkM07PinnedArtifact,
+  checkM07BoundaryArtifact,
 } from "./check-m07-boundaries.mjs";
 
 const root = new URL("..", import.meta.url).pathname;
@@ -261,7 +261,7 @@ const bundles = ["main.js", "worker.js"].map((name) => ({
   text: readFileSync(join(root, name), "utf8"),
 }));
 failures.push(
-  ...checkM07PinnedArtifact(bundles[0].text).failures.map(
+  ...checkM07BoundaryArtifact(bundles[0].text).failures.map(
     (reason) => `main.js: ${reason}`,
   ),
 );

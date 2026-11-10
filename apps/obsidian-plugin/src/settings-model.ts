@@ -6,6 +6,21 @@ import {
   validateProviderOutputCap,
   validateProviderTimeout,
 } from "@chat2vault/core";
+import type {
+  CaptureReconciliationClearResult,
+  CaptureReconciliationPrepareInput,
+  CaptureReconciliationPrepareResult,
+  CaptureReconciliationRecord,
+  CaptureReconciliationStatus,
+  CaptureReconciliationToken,
+  CaptureReconciliationUpdateResult,
+  CaptureTemporaryCandidate,
+} from "./capture-reconciliation.js";
+import {
+  isCapturePhysicalIdentity,
+  isCaptureTemporaryName,
+  projectCapturePhysicalIdentity,
+} from "./capture-identifiers.js";
 
 export type PreviewMessagesPerPage = 10 | 25 | 50;
 export interface Chat2VaultSettingsV1 {
@@ -38,6 +53,13 @@ export interface Chat2VaultSettingsV4 {
   sourceRoot: string;
   knowledgeRoot: string;
   provider: ProviderSettings;
+}
+export interface Chat2VaultSettingsV5 extends Omit<
+  Chat2VaultSettingsV4,
+  "schemaVersion"
+> {
+  schemaVersion: 5;
+  captureReconciliation: CaptureReconciliationRecord | null;
 }
 
 /** Frozen M03 default, retained for the explicit future-schema v2 save path. */
@@ -86,6 +108,7 @@ export interface SettingsLoadResult {
   identityState: IdentityState;
   pendingProviderBasis?: ProviderSettings;
   providerReadiness: ProviderReadiness;
+  captureReconciliation: CaptureReconciliationStatus;
 }
 export type SettingsSaveResult =
   | { status: "saved" }
@@ -174,6 +197,7 @@ const V4_KEYS = [
   "knowledgeRoot",
   "provider",
 ] as const;
+const V5_KEYS = [...V4_KEYS, "captureReconciliation"] as const;
 const PROVIDER_KEYS = [
   "endpoint",
   "model",
@@ -181,6 +205,23 @@ const PROVIDER_KEYS = [
   "maxOutputTokens",
   "cloudDisclosureAccepted",
 ] as const;
+const RECONCILIATION_BASE_KEYS = [
+  "version",
+  "state",
+  "transactionId",
+  "targetPathDigest",
+  "targetLocator",
+  "sourceRootPathDigest",
+  "sourceRootIdentity",
+] as const;
+const RECONCILIATION_TEMPORARY_KEYS = [
+  ...RECONCILIATION_BASE_KEYS,
+  "temporaryCandidate",
+] as const;
+const IDENTITY_KEYS = ["device", "inode"] as const;
+const TEMPORARY_CANDIDATE_KEYS = ["name", "ownership"] as const;
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/u;
+const TARGET_LOCATOR = /^[0-9a-f]{12}$/u;
 
 function diagnostic(code: SettingsLoadDiagnosticCode): SettingsLoadDiagnostic {
   return { code, severity: "warning", message: MESSAGES[code] };
@@ -353,6 +394,87 @@ function validPage(value: unknown): value is PreviewMessagesPerPage {
 function validUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_V4.test(value);
 }
+function persistedIdentity(
+  value: unknown,
+): { device: string; inode: string } | undefined {
+  const record = projectJsonObject(value);
+  return record !== undefined &&
+    exactKeys(record, IDENTITY_KEYS) &&
+    isCapturePhysicalIdentity(record)
+    ? { device: record.device, inode: record.inode }
+    : undefined;
+}
+function persistedTemporaryCandidate(
+  value: unknown,
+): CaptureTemporaryCandidate | undefined {
+  const record = projectJsonObject(value);
+  if (
+    record === undefined ||
+    !exactKeys(
+      record,
+      Object.hasOwn(record, "identity")
+        ? [...TEMPORARY_CANDIDATE_KEYS, "identity"]
+        : TEMPORARY_CANDIDATE_KEYS,
+    )
+  )
+    return undefined;
+  const identity = persistedIdentity(record.identity);
+  if (
+    typeof record.name !== "string" ||
+    !isCaptureTemporaryName(record.name) ||
+    record.ownership !== "unverified" ||
+    (Object.hasOwn(record, "identity") && identity === undefined)
+  )
+    return undefined;
+  return {
+    name: record.name,
+    ownership: "unverified",
+    ...(identity === undefined ? {} : { identity }),
+  };
+}
+function persistedCaptureReconciliation(
+  value: unknown,
+): CaptureReconciliationRecord | undefined {
+  const record = projectJsonObject(value);
+  if (record === undefined) return undefined;
+  const state = record.state;
+  const expectedKeys =
+    state === "temporary-uncertain"
+      ? RECONCILIATION_TEMPORARY_KEYS
+      : RECONCILIATION_BASE_KEYS;
+  const sourceRootIdentity = persistedIdentity(record.sourceRootIdentity);
+  if (
+    !exactKeys(record, expectedKeys) ||
+    record.version !== 1 ||
+    (state !== "prepared" &&
+      state !== "published-uncertain" &&
+      state !== "temporary-uncertain") ||
+    !validUuid(record.transactionId) ||
+    typeof record.targetPathDigest !== "string" ||
+    !SHA256_DIGEST.test(record.targetPathDigest) ||
+    typeof record.targetLocator !== "string" ||
+    !TARGET_LOCATOR.test(record.targetLocator) ||
+    typeof record.sourceRootPathDigest !== "string" ||
+    !SHA256_DIGEST.test(record.sourceRootPathDigest) ||
+    sourceRootIdentity === undefined
+  )
+    return undefined;
+  const base = {
+    version: 1 as const,
+    transactionId: record.transactionId,
+    targetPathDigest: record.targetPathDigest,
+    targetLocator: record.targetLocator,
+    sourceRootPathDigest: record.sourceRootPathDigest,
+    sourceRootIdentity,
+  };
+  if (state !== "temporary-uncertain") return { ...base, state };
+  const temporaryCandidate = persistedTemporaryCandidate(
+    record.temporaryCandidate,
+  );
+  return temporaryCandidate === undefined
+    ? undefined
+    : { ...base, state, temporaryCandidate };
+}
 function copyProvider(provider: ProviderSettings): ProviderSettings {
   return { ...provider };
 }
@@ -449,7 +571,7 @@ function readM03(value: unknown): M03Load {
       future: false,
     };
   const schema = record.schemaVersion;
-  if (typeof schema === "number" && Number.isSafeInteger(schema) && schema >= 5)
+  if (typeof schema === "number" && Number.isSafeInteger(schema) && schema >= 6)
     return {
       settings: { ...DEFAULT_SETTINGS },
       diagnostics: [diagnostic("UNSUPPORTED_SETTINGS_SCHEMA")],
@@ -515,6 +637,7 @@ function readM03(value: unknown): M03Load {
 function pending(
   settings: Chat2VaultSettingsV4,
   diagnostics: AnySettingsLoadDiagnostic[],
+  captureReconciliation: CaptureReconciliationStatus = { status: "clear" },
 ): SettingsLoadResult {
   return {
     settings,
@@ -522,6 +645,7 @@ function pending(
     identityState: "pending",
     pendingProviderBasis: copyProvider(settings.provider),
     providerReadiness: { state: "unavailable", result: "initializing" },
+    captureReconciliation,
   };
 }
 
@@ -531,11 +655,19 @@ export function readSettings(
   randomUuid: () => string = () => crypto.randomUUID(),
 ): SettingsLoadResult {
   const record = projectJsonObject(value);
-  if (record?.schemaVersion === 3 || record?.schemaVersion === 4) {
+  if (
+    record?.schemaVersion === 3 ||
+    record?.schemaVersion === 4 ||
+    record?.schemaVersion === 5
+  ) {
     const diagnostics: AnySettingsLoadDiagnostic[] = [];
     const exact = exactKeys(
       record,
-      record.schemaVersion === 3 ? V3_KEYS : V4_KEYS,
+      record.schemaVersion === 3
+        ? V3_KEYS
+        : record.schemaVersion === 4
+          ? V4_KEYS
+          : V5_KEYS,
     );
     if (!exact) diagnostics.push(diagnostic("INVALID_PERSISTED_SETTINGS"));
     const installationId = validUuid(record.installationId)
@@ -555,7 +687,7 @@ export function readSettings(
     )
       diagnostics.push(diagnostic("INVALID_PERSISTED_SETTINGS"));
     const malformedKnowledgeRoot =
-      record.schemaVersion === 4 && typeof record.knowledgeRoot !== "string";
+      record.schemaVersion !== 3 && typeof record.knowledgeRoot !== "string";
     if (
       malformedKnowledgeRoot &&
       !diagnostics.some((item) => item.code === "INVALID_PERSISTED_SETTINGS")
@@ -574,7 +706,7 @@ export function readSettings(
         diagnostics.push(diagnostic("INVALID_PERSISTED_SOURCE_ROOT"));
     }
     let knowledgeRoot = "";
-    if (record.schemaVersion === 4) {
+    if (record.schemaVersion !== 3) {
       if (typeof record.knowledgeRoot === "string") {
         const root = normalizeSourceRoot(record.knowledgeRoot);
         if (root.status === "configured") knowledgeRoot = root.sourceRoot;
@@ -596,6 +728,20 @@ export function readSettings(
       knowledgeRoot,
       provider,
     };
+    const captureReconciliation: CaptureReconciliationStatus =
+      record.schemaVersion !== 5 || record.captureReconciliation === null
+        ? { status: "clear" }
+        : (() => {
+            const persisted = persistedCaptureReconciliation(
+              record.captureReconciliation,
+            );
+            return persisted === undefined
+              ? {
+                  status: "failed" as const,
+                  code: "CAPTURE_RECONCILIATION_LOAD_FAILED" as const,
+                }
+              : { status: "unresolved" as const, record: persisted };
+          })();
     return validUuid(record.installationId)
       ? {
           settings,
@@ -605,8 +751,9 @@ export function readSettings(
             state: "unavailable",
             result: "credential-unknown",
           },
+          captureReconciliation,
         }
-      : pending(settings, diagnostics);
+      : pending(settings, diagnostics, captureReconciliation);
   }
   const inherited = readM03(value);
   if (inherited.future)
@@ -617,6 +764,10 @@ export function readSettings(
       providerReadiness: {
         state: "unavailable",
         result: "unsupported-settings",
+      },
+      captureReconciliation: {
+        status: "failed",
+        code: "CAPTURE_RECONCILIATION_LOAD_FAILED",
       },
     };
   return pending(
@@ -680,19 +831,24 @@ export class SettingsController {
   public knowledgeRootPersistenceState: KnowledgeRootPersistenceState = {
     status: "settled",
   };
+  public captureReconciliation: CaptureReconciliationStatus;
+  private activeCapturePublication: CaptureReconciliationToken | undefined;
   public constructor(
     loaded: SettingsLoadResult | Chat2VaultSettingsV4,
     private readonly persist: (
-      settings: Chat2VaultSettingsV4 | Chat2VaultSettingsV2,
+      settings:
+        Chat2VaultSettingsV5 | Chat2VaultSettingsV4 | Chat2VaultSettingsV2,
     ) => Promise<void>,
     private readonly invalidateSourceState: () => void,
     private readonly hooks: SettingsControllerHooks = {},
+    private readonly randomUuid: () => string = () => crypto.randomUUID(),
   ) {
     const load = "settings" in loaded ? loaded : pending(loaded, []);
     this.settings = load.settings;
     this.identityState = load.identityState;
     this.providerReadiness = load.providerReadiness;
     this.providerDraft = copyProvider(load.settings.provider);
+    this.captureReconciliation = load.captureReconciliation;
     if (load.identityState === "pending")
       this.pendingIdentity = {
         installationId: load.settings.installationId,
@@ -729,6 +885,25 @@ export class SettingsController {
       status: "in-progress",
       code: "PROVIDER_SETTINGS_OPERATION_IN_PROGRESS",
     };
+  }
+  private persistedV5(
+    settings: Chat2VaultSettingsV4,
+    reconciliation = this.captureReconciliation,
+  ): Chat2VaultSettingsV5 {
+    if (reconciliation.status === "failed")
+      throw new Error("capture reconciliation state is unavailable");
+    return {
+      ...settings,
+      schemaVersion: 5,
+      captureReconciliation:
+        reconciliation.status === "clear" ? null : reconciliation.record,
+    };
+  }
+  private persistCurrent(
+    settings: Chat2VaultSettingsV4,
+    reconciliation = this.captureReconciliation,
+  ): Promise<void> {
+    return this.persist(this.persistedV5(settings, reconciliation));
   }
   private candidate(
     page = this.settings.previewMessagesPerPage,
@@ -794,7 +969,7 @@ export class SettingsController {
     const next = this.candidate();
     const lifecycleGeneration = this.lifecycleGeneration;
     try {
-      await this.persist(next);
+      await this.persistCurrent(next);
       if (this.lifecycleGeneration !== lifecycleGeneration)
         return { status: "failed", code: "PROVIDER_IDENTITY_SAVE_FAILED" };
       this.installIdentity(next);
@@ -871,7 +1046,7 @@ export class SettingsController {
       this.hooks.invalidateProviderOwnerAndAbort?.();
       const next = { ...previous, provider: validated.value };
       try {
-        await this.persist(next);
+        await this.persistCurrent(next);
         this.settings = next;
         this.providerDraft = copyProvider(validated.value);
         ++this.providerSettingsGeneration;
@@ -917,24 +1092,14 @@ export class SettingsController {
       )
         return { status: "unchanged" };
       if (this.identityState === "unsupported-future") {
-        try {
-          await this.persist({
-            schemaVersion: 2,
-            previewMessagesPerPage: value,
-            sourceRoot: previous.sourceRoot,
-          });
-          this.settings = { ...previous, previewMessagesPerPage: value };
-          return { status: "saved" };
-        } catch {
-          return {
-            status: "failed",
-            message: "The preview setting could not be saved.",
-          };
-        }
+        return {
+          status: "failed",
+          message: "The preview setting could not be saved.",
+        };
       }
       this.settings = next;
       try {
-        await this.persist(next);
+        await this.persistCurrent(next);
         if (this.pendingIdentity !== undefined) this.installIdentity(next);
         return { status: "saved" };
       } catch {
@@ -971,25 +1136,14 @@ export class SettingsController {
         proposedRoot: root,
       };
       if (this.identityState === "unsupported-future") {
-        try {
-          await this.persist({
-            schemaVersion: 2,
-            previewMessagesPerPage: previous.previewMessagesPerPage,
-            sourceRoot: root,
-          });
-          this.settings = { ...previous, sourceRoot: root };
-          return { status: "saved" };
-        } catch {
-          return {
-            status: "failed",
-            message: "The source folder setting could not be saved.",
-          };
-        } finally {
-          this.sourceRootPersistenceState = { status: "settled" };
-        }
+        this.sourceRootPersistenceState = { status: "settled" };
+        return {
+          status: "failed",
+          message: "The source folder setting could not be saved.",
+        };
       }
       try {
-        await this.persist(next);
+        await this.persistCurrent(next);
         this.settings = next;
         if (this.pendingIdentity !== undefined) this.installIdentity(next);
         return { status: "saved" };
@@ -1036,7 +1190,7 @@ export class SettingsController {
       };
       try {
         this.hooks.invalidateKnowledgeState?.();
-        await this.persist(next);
+        await this.persistCurrent(next);
         this.settings = next;
         this.knowledgeWriteGeneration += 1;
         if (this.pendingIdentity !== undefined) this.installIdentity(next);
@@ -1052,5 +1206,235 @@ export class SettingsController {
     } finally {
       this.releaseSettingsMutex();
     }
+  }
+
+  public async prepareCaptureReconciliation(
+    value: unknown,
+  ): Promise<CaptureReconciliationPrepareResult> {
+    if (!this.tryAcquire())
+      return {
+        status: "failed",
+        code: "CAPTURE_RECONCILIATION_REQUIRED",
+      };
+    try {
+      if (this.captureReconciliation.status === "unresolved")
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_REQUIRED",
+        };
+      if (this.captureReconciliation.status === "failed")
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+        };
+      const input = value as Partial<CaptureReconciliationPrepareInput> | null;
+      let transactionId: string;
+      try {
+        transactionId = this.randomUuid();
+      } catch {
+        this.captureReconciliation = {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+        };
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+        };
+      }
+      if (
+        input === null ||
+        typeof input !== "object" ||
+        typeof input.targetPathDigest !== "string" ||
+        !SHA256_DIGEST.test(input.targetPathDigest) ||
+        typeof input.targetLocator !== "string" ||
+        !TARGET_LOCATOR.test(input.targetLocator) ||
+        typeof input.sourceRootPathDigest !== "string" ||
+        !SHA256_DIGEST.test(input.sourceRootPathDigest) ||
+        !isCapturePhysicalIdentity(input.sourceRootIdentity) ||
+        !validUuid(transactionId)
+      ) {
+        this.captureReconciliation = {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+        };
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+        };
+      }
+      const sourceRootIdentity = projectCapturePhysicalIdentity(
+        input.sourceRootIdentity,
+      );
+      if (sourceRootIdentity === undefined) {
+        this.captureReconciliation = {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+        };
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+        };
+      }
+      const next: CaptureReconciliationStatus = {
+        status: "unresolved",
+        record: {
+          version: 1,
+          state: "prepared",
+          transactionId,
+          targetPathDigest: input.targetPathDigest,
+          targetLocator: input.targetLocator,
+          sourceRootPathDigest: input.sourceRootPathDigest,
+          sourceRootIdentity,
+        },
+      };
+      try {
+        await this.persistCurrent(this.settings, next);
+        this.captureReconciliation = next;
+        this.activeCapturePublication =
+          transactionId as CaptureReconciliationToken;
+        return {
+          status: "prepared",
+          token: transactionId as CaptureReconciliationToken,
+        };
+      } catch {
+        this.captureReconciliation = {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+        };
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_PREPARE_FAILED",
+        };
+      }
+    } finally {
+      this.releaseSettingsMutex();
+    }
+  }
+
+  public async markCaptureReconciliationUncertain(
+    token: CaptureReconciliationToken,
+    effect: "temporary" | "published",
+    candidate?: CaptureTemporaryCandidate,
+  ): Promise<CaptureReconciliationUpdateResult> {
+    if (!this.tryAcquire()) {
+      if (this.activeCapturePublication === token)
+        this.activeCapturePublication = undefined;
+      return {
+        status: "failed",
+        code: "CAPTURE_RECONCILIATION_UPDATE_FAILED",
+      };
+    }
+    try {
+      const current = this.captureReconciliation;
+      const projectedCandidate =
+        effect === "temporary"
+          ? persistedTemporaryCandidate(candidate)
+          : undefined;
+      if (
+        current.status !== "unresolved" ||
+        current.record.transactionId !== token ||
+        (effect === "temporary" && projectedCandidate === undefined)
+      )
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_UPDATE_FAILED",
+        };
+      let next: CaptureReconciliationStatus;
+      if (effect === "published")
+        next = {
+          status: "unresolved",
+          record: { ...current.record, state: "published-uncertain" },
+        };
+      else {
+        if (projectedCandidate === undefined)
+          return {
+            status: "failed",
+            code: "CAPTURE_RECONCILIATION_UPDATE_FAILED",
+          };
+        next = {
+          status: "unresolved",
+          record: {
+            ...current.record,
+            state: "temporary-uncertain",
+            temporaryCandidate: projectedCandidate,
+          },
+        };
+      }
+      try {
+        await this.persistCurrent(this.settings, next);
+        this.captureReconciliation = next;
+        return { status: "updated" };
+      } catch {
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_UPDATE_FAILED",
+        };
+      }
+    } finally {
+      if (this.activeCapturePublication === token)
+        this.activeCapturePublication = undefined;
+      this.releaseSettingsMutex();
+    }
+  }
+
+  private async clearCaptureReconciliation(
+    token?: CaptureReconciliationToken,
+  ): Promise<CaptureReconciliationClearResult> {
+    if (token === undefined && this.activeCapturePublication !== undefined)
+      return {
+        status: "failed",
+        code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+      };
+    if (!this.tryAcquire())
+      return {
+        status: "failed",
+        code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+      };
+    try {
+      if (this.captureReconciliation.status === "clear")
+        return token === undefined
+          ? { status: "cleared" }
+          : { status: "failed", code: "CAPTURE_RECONCILIATION_CLEAR_FAILED" };
+      if (this.captureReconciliation.status === "failed")
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+        };
+      if (
+        token !== undefined &&
+        this.captureReconciliation.record.transactionId !== token
+      )
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+        };
+      try {
+        await this.persistCurrent(this.settings, { status: "clear" });
+        this.captureReconciliation = { status: "clear" };
+        return { status: "cleared" };
+      } catch {
+        return {
+          status: "failed",
+          code: "CAPTURE_RECONCILIATION_CLEAR_FAILED",
+        };
+      }
+    } finally {
+      if (token !== undefined && this.activeCapturePublication === token)
+        this.activeCapturePublication = undefined;
+      this.releaseSettingsMutex();
+    }
+  }
+
+  public clearKnownCaptureReconciliation(
+    token: CaptureReconciliationToken,
+  ): Promise<CaptureReconciliationClearResult> {
+    return this.clearCaptureReconciliation(token).finally(() => {
+      if (this.activeCapturePublication === token)
+        this.activeCapturePublication = undefined;
+    });
+  }
+
+  public acknowledgeCaptureReconciliation(): Promise<CaptureReconciliationClearResult> {
+    return this.clearCaptureReconciliation();
   }
 }

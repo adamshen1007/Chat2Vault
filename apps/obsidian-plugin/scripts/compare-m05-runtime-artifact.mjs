@@ -50,6 +50,7 @@ export function compareM05RuntimeArtifacts(production, runtime) {
     "src/runtime-test-mutation-ledger.ts",
     "src/runtime-test-m07.ts",
     "src/runtime-test-m07-ledger.ts",
+    "src/runtime-test-m08.ts",
   ]);
   for (const [input, identity] of productionInputs) {
     const runtimeIdentity = runtimeInputs.get(input);

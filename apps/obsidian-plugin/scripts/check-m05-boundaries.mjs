@@ -130,6 +130,14 @@ const settingsModel = readFileSync(
   join(sourceRoot, "settings-model.ts"),
   "utf8",
 );
+const m05SettingsModel = settingsModel.replace(
+  /^ {4}candidate\?: CaptureTemporaryCandidate,$/mu,
+  "",
+);
+if (m05SettingsModel === settingsModel)
+  failures.push(
+    "settings-model.ts: missing exact M08 reconciliation candidate allowlist",
+  );
 for (const required of [
   'const V3_KEYS = [\n  "schemaVersion",\n  "installationId",\n  "previewMessagesPerPage",\n  "sourceRoot",\n  "provider",\n] as const;',
   'const PROVIDER_KEYS = [\n  "endpoint",\n  "model",\n  "timeoutMs",\n  "maxOutputTokens",\n  "cloudDisclosureAccepted",\n] as const;',
@@ -145,7 +153,9 @@ for (const forbidden of [
   "usage",
 ])
   if (
-    new RegExp(`^[ \\t]*["']?${forbidden}["']?\\??:`, "imu").test(settingsModel)
+    new RegExp(`^[ \\t]*["']?${forbidden}["']?\\??:`, "imu").test(
+      m05SettingsModel,
+    )
   )
     failures.push(`settings-model.ts: forbidden persisted field ${forbidden}`);
 

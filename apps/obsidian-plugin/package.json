@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "build:native": "node scripts/build-native.mjs",
+    "build:native:test": "node scripts/build-native.mjs --test-only",
     "build": "pnpm build:native && node esbuild.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

@@ -1,50 +1,57 @@
 # Chat2Vault Document Index
 
-Version: 0.26
-Status: M03-M06 complete and merged; M07 implementation and runtime gates passed. A local M07 commit is authorized; push, PR, merge, and release are not.
+Version: 0.32
+Status: M03-M07 complete and merged; M07 is not released. M08 is an uncommitted, locally verified selected-text capture candidate. Two-row macOS host evidence and final exact-candidate gates pass; unselected Web Clipper extraction failed fidelity and is not claimed. Publication and release remain unauthorized.
 Working name: Chat2Vault
 
-| Document                                                             | Purpose                                                                                            |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `01_PRODUCT_BRIEF.md`                                                | Product problem, users, value proposition, MVP scope, non-goals, acceptance thesis                 |
-| `02_COMPETITIVE_POSITIONING.md`                                      | Existing alternatives and the differentiation required for an open-source project                  |
-| `03_ARCHITECTURE.md`                                                 | Local-first architecture, trust boundaries, components, data flow, repository shape                |
-| `04_KNOWLEDGE_SCHEMA.md`                                             | Source, candidate, note, provenance, identity, and deduplication contracts                         |
-| `05_ROADMAP.md`                                                      | Milestones, gates, dependencies, exit criteria, release path                                       |
-| `06_OPEN_SOURCE_RELEASE_STRATEGY.md`                                 | Licensing, distribution, contribution, privacy, compatibility, community release requirements      |
-| `07_M01_SPEC.md`                                                     | Milestone 01 specification and verification gate                                                   |
-| `08_M01_IMPLEMENTATION_NOTES.md`                                     | Implemented parser behavior, branch rule, fingerprints, ZIP security, and limitations              |
-| `M02_SPEC.md`                                                        | Reviewed Milestone 02 preview-plugin specification and acceptance contract                         |
-| `09_M02_IMPLEMENTATION_NOTES.md`                                     | M02 implementation, privacy/security bounds, build, verification, and runtime smoke procedure      |
-| `10_M02_RUNTIME_GATE_REPORT.md`                                      | Historical first runtime-gate execution, blockers, and superseded compatibility evidence           |
-| `11_M02_RUNTIME_CLOSURE_REPORT.md`                                   | Final exact-minimum/current-stable closure evidence, AC ledger, and M02 decision                   |
-| `M03_SPEC.md`                                                        | Independently approved and byte-frozen Milestone 03 implementation authority                       |
-| `M03_MACOS_SCOPE_AMENDMENT.md`                                       | Independently approved M03.1 macOS-only platform/runtime/acceptance amendment                      |
-| `12_M03_IMPLEMENTATION_NOTES.md`                                     | M03 source registry/writer implementation, boundaries, artifacts, and verification                 |
-| `13_M03_RUNTIME_GATE_REPORT.md`                                      | Historical pre-commit M03 automated/runtime evidence ledger and readiness decision                 |
-| `14_M03_CLOSURE_REPORT.md`                                           | Final independent verdict, publication chronology, post-merge verification, and M03 closure        |
-| `M04_SPEC.md`                                                        | Independently approved, byte-frozen M04 manual-distillation implementation authority               |
-| `15_M04_IMPLEMENTATION_NOTES.md`                                     | M04 candidate implementation, automated evidence, AC ledger, and remaining runtime/review gate     |
-| `16_M04_RUNTIME_GATE_REPORT.md`                                      | M04 two-row macOS runtime qualification, attributed evidence, and runtime decision                 |
-| `17_M04_CLOSURE_REPORT.md`                                           | Final independent verdict, publication chronology, post-merge verification, and M04 closure        |
-| `M05_SPEC.md`                                                        | Independently approved byte-frozen M05 OpenAI-compatible cloud adapter specification               |
-| `M05_SPEC_REVIEW_LEDGER.md`                                          | M05 v1–v7 independent specification findings and exact remediation lineage                         |
-| `M05_FILE_KEYCHAIN_AMENDMENT.md`                                     | Approved file-Keychain selection amendment for the M05 native credential boundary                  |
-| `18_M05_IMPLEMENTATION_NOTES.md`                                     | M05 implementation architecture, inventory, acceptance mapping, evidence, and readiness state      |
-| `19_M05_RUNTIME_GATE_REPORT.md`                                      | Exact Obsidian 1.7.4/current-stable two-row M05 macOS runtime qualification                        |
-| `20_M06_IMPLEMENTATION_NOTES.md`                                     | M06 architecture, user workflow, inventory, verification, limitations, and readiness state         |
-| `21_M06_RUNTIME_GATE_REPORT.md`                                      | Exact Obsidian 1.7.4/current-stable two-row M06 macOS runtime qualification                        |
-| `22_M06_CLOSURE_REPORT.md`                                           | Final independent verdict, PR #6 merge chronology, verification, and M06 closure                   |
-| `23_M07_IMPLEMENTATION_REPORT.md`                                    | Uncommitted M07 implementation, acceptance, verification, review, and publication state            |
-| `24_M07_RUNTIME_GATE_REPORT.md`                                      | Exact minimum/current-stable macOS M07 runtime rows and artifact identity                          |
-| `evidence/m07-runtime-minimum.json`                                  | Sanitized exact minimum Obsidian 1.7.4 M07 runtime packet                                          |
-| `evidence/m07-runtime-stable.json`                                   | Sanitized exact current-stable M07 runtime packet                                                  |
-| `superpowers/specs/2026-09-15-m06-knowledge-review-writer-design.md` | Product Owner-approved M06 architecture, UX, write-safety, and verification design                 |
-| `superpowers/specs/2026-10-12-m07-deduplication-linking-design.md`   | Product Owner-approved M07 local deduplication, related-note, and create-only combined-note design |
-| `superpowers/plans/2026-09-15-m06-knowledge-review-writer.md`        | Test-first task plan for implementing and qualifying the approved M06 design                       |
-| `superpowers/plans/2026-10-12-m07-deduplication-linking.md`          | Dependency-ordered test-first implementation and qualification plan for approved M07 design        |
-| `../prompts/CODEX_M01_EXECUTION_PROMPT.md`                           | Consolidated Codex implementation prompt for Milestone 01                                          |
-| `../AGENTS.md`                                                       | Persistent repository governance for Codex/agents                                                  |
+| Document                                                             | Purpose                                                                                                       |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `01_PRODUCT_BRIEF.md`                                                | Product problem, users, value proposition, MVP scope, non-goals, acceptance thesis                            |
+| `02_COMPETITIVE_POSITIONING.md`                                      | Existing alternatives and the differentiation required for an open-source project                             |
+| `03_ARCHITECTURE.md`                                                 | Local-first architecture, trust boundaries, components, data flow, repository shape                           |
+| `04_KNOWLEDGE_SCHEMA.md`                                             | Source, candidate, note, provenance, identity, and deduplication contracts                                    |
+| `05_ROADMAP.md`                                                      | Milestones, gates, dependencies, exit criteria, release path                                                  |
+| `06_OPEN_SOURCE_RELEASE_STRATEGY.md`                                 | Licensing, distribution, contribution, privacy, compatibility, community release requirements                 |
+| `07_M01_SPEC.md`                                                     | Milestone 01 specification and verification gate                                                              |
+| `08_M01_IMPLEMENTATION_NOTES.md`                                     | Implemented parser behavior, branch rule, fingerprints, ZIP security, and limitations                         |
+| `M02_SPEC.md`                                                        | Reviewed Milestone 02 preview-plugin specification and acceptance contract                                    |
+| `09_M02_IMPLEMENTATION_NOTES.md`                                     | M02 implementation, privacy/security bounds, build, verification, and runtime smoke procedure                 |
+| `10_M02_RUNTIME_GATE_REPORT.md`                                      | Historical first runtime-gate execution, blockers, and superseded compatibility evidence                      |
+| `11_M02_RUNTIME_CLOSURE_REPORT.md`                                   | Final exact-minimum/current-stable closure evidence, AC ledger, and M02 decision                              |
+| `M03_SPEC.md`                                                        | Independently approved and byte-frozen Milestone 03 implementation authority                                  |
+| `M03_MACOS_SCOPE_AMENDMENT.md`                                       | Independently approved M03.1 macOS-only platform/runtime/acceptance amendment                                 |
+| `12_M03_IMPLEMENTATION_NOTES.md`                                     | M03 source registry/writer implementation, boundaries, artifacts, and verification                            |
+| `13_M03_RUNTIME_GATE_REPORT.md`                                      | Historical pre-commit M03 automated/runtime evidence ledger and readiness decision                            |
+| `14_M03_CLOSURE_REPORT.md`                                           | Final independent verdict, publication chronology, post-merge verification, and M03 closure                   |
+| `M04_SPEC.md`                                                        | Independently approved, byte-frozen M04 manual-distillation implementation authority                          |
+| `15_M04_IMPLEMENTATION_NOTES.md`                                     | M04 candidate implementation, automated evidence, AC ledger, and remaining runtime/review gate                |
+| `16_M04_RUNTIME_GATE_REPORT.md`                                      | M04 two-row macOS runtime qualification, attributed evidence, and runtime decision                            |
+| `17_M04_CLOSURE_REPORT.md`                                           | Final independent verdict, publication chronology, post-merge verification, and M04 closure                   |
+| `M05_SPEC.md`                                                        | Independently approved byte-frozen M05 OpenAI-compatible cloud adapter specification                          |
+| `M05_SPEC_REVIEW_LEDGER.md`                                          | M05 v1–v7 independent specification findings and exact remediation lineage                                    |
+| `M05_FILE_KEYCHAIN_AMENDMENT.md`                                     | Approved file-Keychain selection amendment for the M05 native credential boundary                             |
+| `18_M05_IMPLEMENTATION_NOTES.md`                                     | M05 implementation architecture, inventory, acceptance mapping, evidence, and readiness state                 |
+| `19_M05_RUNTIME_GATE_REPORT.md`                                      | Exact Obsidian 1.7.4/current-stable two-row M05 macOS runtime qualification                                   |
+| `20_M06_IMPLEMENTATION_NOTES.md`                                     | M06 architecture, user workflow, inventory, verification, limitations, and readiness state                    |
+| `21_M06_RUNTIME_GATE_REPORT.md`                                      | Exact Obsidian 1.7.4/current-stable two-row M06 macOS runtime qualification                                   |
+| `22_M06_CLOSURE_REPORT.md`                                           | Final independent verdict, PR #6 merge chronology, verification, and M06 closure                              |
+| `23_M07_IMPLEMENTATION_REPORT.md`                                    | Historical pre-commit M07 implementation, acceptance, verification, and review state                          |
+| `24_M07_RUNTIME_GATE_REPORT.md`                                      | Exact minimum/current-stable macOS M07 runtime rows and artifact identity                                     |
+| `25_M07_CLOSURE_REPORT.md`                                           | Final M07 candidate identity, PR #8 merge chronology, scope, limitations, and closure                         |
+| `26_M08_IMPLEMENTATION_REPORT.md`                                    | M08 implementation, exact-candidate host/gate evidence, acceptance mapping, and selected-text limitation      |
+| `M08_CAPTURE_WORKFLOW.md`                                            | Manual ChatGPT capture and qualified selected-text Web Clipper route, privacy, and extraction limitation      |
+| `evidence/m07-runtime-minimum.json`                                  | Sanitized exact minimum Obsidian 1.7.4 M07 runtime packet                                                     |
+| `evidence/m07-runtime-stable.json`                                   | Sanitized exact current-stable M07 runtime packet                                                             |
+| `evidence/m08-runtime-minimum.json`                                  | Sanitized minimum Obsidian 1.7.4 M08 host packet; exact-candidate binding checked by `pnpm check:m08`         |
+| `evidence/m08-runtime-stable.json`                                   | Sanitized current-stable Obsidian 1.14.5 M08 host packet; exact-candidate binding checked by `pnpm check:m08` |
+| `superpowers/specs/2026-09-15-m06-knowledge-review-writer-design.md` | Product Owner-approved M06 architecture, UX, write-safety, and verification design                            |
+| `superpowers/specs/2026-10-12-m07-deduplication-linking-design.md`   | Product Owner-approved M07 local deduplication, related-note, and create-only combined-note design            |
+| `superpowers/specs/2026-10-15-m08-chatgpt-current-capture-design.md` | Product Owner-approved ChatGPT-first capture-source design and implementation authority                       |
+| `superpowers/plans/2026-09-15-m06-knowledge-review-writer.md`        | Test-first task plan for implementing and qualifying the approved M06 design                                  |
+| `superpowers/plans/2026-10-12-m07-deduplication-linking.md`          | Dependency-ordered test-first implementation and qualification plan for approved M07 design                   |
+| `superpowers/plans/2026-10-15-m08-chatgpt-current-capture.md`        | Dependency-ordered active M08 capture-source implementation and qualification plan                            |
+| `../prompts/CODEX_M01_EXECUTION_PROMPT.md`                           | Consolidated Codex implementation prompt for Milestone 01                                                     |
+| `../AGENTS.md`                                                       | Persistent repository governance for Codex/agents                                                             |
 
 ## Authority order
 
@@ -114,3 +121,5 @@ For Milestone 06 design, the authority order is:
 8. `docs/06_OPEN_SOURCE_RELEASE_STRATEGY.md`
 
 The approved design was the complete M06 implementation authority. Its approval authorized implementation planning; the Product Owner then separately selected and executed the committed implementation plan. The milestone authority baseline was the M05 merge `be0f5803ac39120e00e9994a936a8858a1cf3187`; approved design commit `81964c7ed7367e59cefe1c946d74c4424dfb144d` and plan commit `f05b0016cde3ca984f024a1ccf1edd93e56d0323` were later M06 documentation baselines. The exact final candidate received a fresh independent `GO — M06 COMMIT READY` review and a separate Product Owner publication instruction. Pull request #6 squash-merged M06 into `main` at `aaf44aaf37c4fd3d458d663a42e3e7bb22459928`; its tree equals the reviewed candidate tree. See `22_M06_CLOSURE_REPORT.md` for the chronology. No tag, deployment, release, Community Plugin submission, provider spend, or M07 work was authorized by M06 closure.
+
+For Milestone 07, the Product Owner-approved design and plan governed the implementation on the M06 closure baseline. The exact candidate passed the M07 two-row macOS runtime gate, the complete repository verification aggregate, and a fresh independent R2 review before a separately authorized commit and publication. Pull request #8 squash-merged M07 into `main` at `932405219febc50e169ce364214f0b4de5cee488`; the merge tree equals the reviewed branch tree. The pre-commit implementation and runtime reports remain historical snapshots. See `25_M07_CLOSURE_REPORT.md` for the publication chronology and residual limits. M08 implementation, tag, deployment, release, and Community Plugin submission are not authorized by M07 closure.

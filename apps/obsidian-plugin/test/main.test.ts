@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /* eslint-disable @typescript-eslint/no-deprecated -- tests exercise the Obsidian 1.7.4 display contract. */
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { PluginSettingTab, Setting, type App } from "obsidian";
 import Chat2VaultPlugin, {
   resolveNativePluginDirectory,
@@ -747,10 +747,15 @@ describe("plugin command lifecycle", () => {
       });
     await plugin.onload();
     const reasons: string[] = [];
+    const captureReasons: string[] = [];
     const integration = plugin as unknown as {
       knowledgeInvalidators: Set<(reason: "settings" | "unload") => void>;
+      captureInvalidators: Set<(reason: "settings" | "unload") => void>;
     };
     integration.knowledgeInvalidators.add((reason) => reasons.push(reason));
+    integration.captureInvalidators.add((reason) =>
+      captureReasons.push(reason),
+    );
 
     await expect(plugin.saveSourceRoot("Other sources")).resolves.toEqual({
       status: "saved",
@@ -760,6 +765,7 @@ describe("plugin command lifecycle", () => {
     });
     plugin.onunload();
     expect(reasons).toEqual(["settings", "settings", "unload"]);
+    expect(captureReasons).toEqual(["settings", "settings", "unload"]);
   });
 
   it("registers without auto-opening, reuses one leaf, and validates only after reveal", async () => {
@@ -787,6 +793,10 @@ describe("plugin command lifecycle", () => {
       setViewState(state: { type: string }): Promise<void>;
     }
     const leaves: TestLeaf[] = [];
+    let activeFile: {
+      path: string;
+      stat: { ctime: number; mtime: number; size: number };
+    } | null = null;
     let getLeafCalls = 0;
     let revealCalls = 0;
     const workspace = {
@@ -808,11 +818,13 @@ describe("plugin command lifecycle", () => {
       },
       revealLeaf: async (leaf: (typeof leaves)[number]) => {
         revealCalls += 1;
+        activeFile = null;
         if (leaf.realView !== undefined) {
           leaf.view = leaf.realView;
           await leaf.realView.onOpen();
         }
       },
+      getActiveFile: () => activeFile,
     };
     plugin.app = {
       workspace,
@@ -829,16 +841,20 @@ describe("plugin command lifecycle", () => {
     } as never;
     await plugin.onload();
     expect(getLeafCalls).toBe(0);
-    expect(harness.commands).toHaveLength(1);
+    expect(harness.commands).toHaveLength(2);
     expect(harness.commands[0]).toMatchObject({
       id: "import-chatgpt-export",
       name: "Import ChatGPT export",
+    });
+    expect(harness.commands[1]).toMatchObject({
+      id: "preview-chatgpt-capture",
+      name: "Preview ChatGPT capture",
     });
     await plugin.savePreviewMessagesPerPage(50);
     await plugin.saveSourceRoot("Sources");
     await plugin.saveKnowledgeRoot("Knowledge");
     expect(harness.savedData).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       previewMessagesPerPage: 50,
       sourceRoot: "Sources",
       knowledgeRoot: "Knowledge",
@@ -857,6 +873,7 @@ describe("plugin command lifecycle", () => {
       "sourceRoot",
       "knowledgeRoot",
       "provider",
+      "captureReconciliation",
     ]);
     harness.commands[0]?.callback();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -877,8 +894,20 @@ describe("plugin command lifecycle", () => {
       "registerInvalidator",
       "registerStateObserver",
     ]);
-    harness.commands[0]?.callback();
+    activeFile = {
+      path: "Staging/original.md",
+      stat: { ctime: 1, mtime: 2, size: 3 },
+    };
+    const preview = vi
+      .spyOn(Chat2VaultView.prototype, "previewActiveCapture")
+      .mockImplementation(() => undefined);
+    harness.commands[1]?.callback();
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(preview).toHaveBeenCalledWith({
+      path: "Staging/original.md",
+      identity: "1:2:3",
+    });
+    preview.mockRestore();
     expect(getLeafCalls).toBe(1);
     expect(revealCalls).toBe(2);
     const realView = leaves[0]?.realView as unknown as
@@ -913,7 +942,7 @@ describe("plugin command lifecycle", () => {
       { schemaVersion: 99, future: { kept: true } },
     ],
   ] as const)(
-    "migrates supported/safe-default settings to v4 and leaves a future schema byte-identical for fixture %#",
+    "migrates supported/safe-default settings to v5 and leaves a future schema byte-identical for fixture %#",
     async (rawBytes, parsed) => {
       const plugin = new Chat2VaultPlugin({} as App, {
         id: "chat-to-vault",
@@ -939,8 +968,9 @@ describe("plugin command lifecycle", () => {
         expect(saves).toBe(0);
       } else {
         expect(JSON.parse(persistedBytes)).toMatchObject({
-          schemaVersion: 4,
+          schemaVersion: 5,
           knowledgeRoot: "",
+          captureReconciliation: null,
           provider: {
             endpoint: "",
             model: "",
@@ -956,7 +986,7 @@ describe("plugin command lifecycle", () => {
   );
 
   it.each(["fulfill", "reject"] as const)(
-    "replaces unsupported future-schema bytes only after an explicit v2 save that will %s",
+    "preserves unsupported future-schema bytes when an explicit save would %s",
     async (settlement) => {
       const original = '{"schemaVersion":99,"future":{"kept":true}}\n';
       let persistedBytes = original;
@@ -982,13 +1012,9 @@ describe("plugin command lifecycle", () => {
       await expect(
         plugin.savePreviewMessagesPerPage(50),
       ).resolves.toMatchObject({
-        status: settlement === "fulfill" ? "saved" : "failed",
+        status: "failed",
       });
-      expect(persistedBytes).toBe(
-        settlement === "fulfill"
-          ? '{"schemaVersion":2,"previewMessagesPerPage":50,"sourceRoot":""}\n'
-          : original,
-      );
+      expect(persistedBytes).toBe(original);
       plugin.onunload();
     },
   );

@@ -13,6 +13,27 @@ export type {
   SourceDescriptor,
   SourceProvider,
 } from "./domain/contracts.js";
+export type {
+  CaptureDraft,
+  CaptureInput,
+  CaptureMethod,
+  CaptureValidation,
+  CaptureValidationCode,
+} from "./capture/contracts.js";
+export {
+  CAPTURE_TEXT_MAX_UTF8_BYTES,
+  CAPTURE_URL_MAX_UTF8_BYTES,
+  validateCapture,
+} from "./capture/normalize.js";
+export {
+  CAPTURE_STAGING_MAX_BYTES,
+  parseStagingCapture,
+} from "./capture/staging.js";
+export { parseCaptureSource, renderCaptureSource } from "./capture/source.js";
+export type {
+  CaptureSourceParseResult,
+  CaptureSourceRegistryEntry,
+} from "./capture/source.js";
 export {
   compareStableStrings,
   fingerprint,

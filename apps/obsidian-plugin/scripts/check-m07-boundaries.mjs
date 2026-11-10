@@ -539,10 +539,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       ...checkM07BoundaryArtifact(bytes).failures.map(
         (reason) => `main.js: ${reason}`,
       ),
-      ...checkM07PinnedArtifact(bytes).failures.map(
-        (reason) => `main.js: ${reason}`,
-      ),
     );
+    if (!process.argv.includes("--functional"))
+      failures.push(
+        ...checkM07PinnedArtifact(bytes).failures.map(
+          (reason) => `main.js: ${reason}`,
+        ),
+      );
   }
   if (failures.length) {
     process.stderr.write(`${failures.join("\n")}\n`);

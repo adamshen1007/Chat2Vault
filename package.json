@@ -13,13 +13,16 @@
     "check:m06": "node apps/obsidian-plugin/scripts/check-m06-boundaries.mjs && pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m06-boundaries.test.ts",
     "check:m06:runtime": "node apps/obsidian-plugin/scripts/check-m06-runtime.mjs",
     "check:m07": "node apps/obsidian-plugin/scripts/check-m07-boundaries.mjs && pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m07-boundaries.test.ts",
+    "check:m07:functional": "node apps/obsidian-plugin/scripts/check-m07-boundaries.mjs --functional && pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m07-boundaries.test.ts",
     "check:m07:runtime": "node apps/obsidian-plugin/scripts/check-m07-runtime.mjs",
-    "check:plugin": "node apps/obsidian-plugin/scripts/check-plugin.mjs && node apps/obsidian-plugin/scripts/check-worker.mjs && node apps/obsidian-plugin/scripts/check-m03-runtime-contracts.mjs && node apps/obsidian-plugin/scripts/check-m04-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m05-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m05-runtime.mjs && node apps/obsidian-plugin/scripts/check-m06-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --artifacts-only && pnpm check:m07 && node apps/obsidian-plugin/scripts/check-m07-runtime.mjs --artifacts-only",
+    "check:m08": "node apps/obsidian-plugin/scripts/check-m08-boundaries.mjs && pnpm --filter @chat2vault/obsidian-plugin exec vitest run test/m08-boundaries.test.ts test/m08-runtime-provenance.test.ts && node apps/obsidian-plugin/scripts/check-m08-runtime.mjs --artifacts-only",
+    "check:m08:runtime": "node apps/obsidian-plugin/scripts/check-m08-runtime.mjs",
+    "check:plugin": "node apps/obsidian-plugin/scripts/check-plugin.mjs && node apps/obsidian-plugin/scripts/check-worker.mjs && node apps/obsidian-plugin/scripts/check-m03-runtime-contracts.mjs && node apps/obsidian-plugin/scripts/check-m04-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m05-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m05-runtime.mjs && node apps/obsidian-plugin/scripts/check-m06-boundaries.mjs && node apps/obsidian-plugin/scripts/check-m06-runtime.mjs --artifacts-only && pnpm check:m07:functional && pnpm check:m08",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm check:plugin"
+    "verify": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm --filter @chat2vault/obsidian-plugin build:native:test && pnpm test && pnpm build && pnpm check:plugin"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",

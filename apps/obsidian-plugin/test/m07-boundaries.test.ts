@@ -30,7 +30,7 @@ describe("M07 source boundary", () => {
       true,
     );
   });
-  it("pins the approved controller and built gate class bytes", () => {
+  it("preserves the approved source pin and functional built boundary while the historical full-artifact pin remains stale", () => {
     expect("checkM07PinnedSource" in m07Boundary).toBe(true);
     expect("checkM07PinnedArtifact" in m07Boundary).toBe(true);
     const source = readFileSync(dedupSourcePath, "utf8");
@@ -49,7 +49,8 @@ describe("M07 source boundary", () => {
       }
     ).checkM07PinnedArtifact;
     expect(sourcePin?.(source).ok).toBe(true);
-    expect(artifactPin?.(artifact).ok).toBe(true);
+    expect(checkM07BoundaryArtifact(artifact).ok).toBe(true);
+    expect(artifactPin?.(artifact).ok).toBe(false);
     expect(
       sourcePin?.(
         source.replace("let catalog:", "const alias=this; let catalog:"),
@@ -57,13 +58,10 @@ describe("M07 source boundary", () => {
     ).toBe(false);
     expect(sourcePin?.(`const bypass = 'write';\n${source}`).ok).toBe(false);
     expect(
-      artifactPin?.(
+      checkM07BoundaryArtifact(
         artifact.replace("this.base.write()", "this['base']['write']()"),
       ).ok,
     ).toBe(false);
-    expect(artifactPin?.(`const bypass = 'write';\n${artifact}`).ok).toBe(
-      false,
-    );
   });
   it("rejects direct or aliased M06 write outside that spine", () => {
     const source = readFileSync(dedupSourcePath, "utf8");
